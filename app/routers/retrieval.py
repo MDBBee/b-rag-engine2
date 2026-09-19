@@ -1,0 +1,30 @@
+import json
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+
+from app.utils.retrieval_pipeline import stream_query
+from app.typing.schemas import QueryRequest
+
+router = APIRouter()
+
+
+@router.post("/query/stream")
+async def query_stream(request: QueryRequest):
+    async def event_stream():
+        try:
+            async for event_type, data in stream_query(
+                query=request.query,
+                collection_name=request.collection_name,
+                thread_id=request.thread_id,
+                retrieval_settings=request.retrieval_settings,
+            ):
+                if event_type == "token":
+                    yield f"data: {json.dumps({'type': 'token', 'content': data})}\n\n"
+                elif event_type == "sources":
+                    yield f"data: {json.dumps({'type': 'sources', 'sources': data})}\n\n"
+                elif event_type == "done":
+                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
