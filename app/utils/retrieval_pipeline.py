@@ -8,11 +8,10 @@ from datetime import datetime
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_chroma import Chroma
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
 
 from app.config import settings
+from app.utils.factories import get_embeddings, get_llm, get_router_llm, get_vectorstore
 
 
 class RAGState(TypedDict):
@@ -22,46 +21,12 @@ class RAGState(TypedDict):
     collection_name: str
 
 
-def _get_embeddings() -> OpenAIEmbeddings:
-    return OpenAIEmbeddings(
-        model=settings.embedding_model,
-        openai_api_key=settings.openrouter_api_key,
-        openai_api_base=settings.openrouter_base_url,
-    )
-
-
-def _get_vectorstore(collection_name: str) -> Chroma:
-    return Chroma(
-        collection_name=collection_name,
-        embedding_function=_get_embeddings(),
-        persist_directory=settings.chroma_persist_dir,
-    )
-
-
-def _get_llm() -> ChatOpenAI:
-    return ChatOpenAI(
-        model=settings.llm_model,
-        openai_api_key=settings.openrouter_api_key,
-        openai_api_base=settings.openrouter_base_url,
-        temperature=0,
-    )
-
-
-def _get_router_llm() -> ChatOpenAI:
-    return ChatOpenAI(
-        model=settings.router_model,
-        openai_api_key=settings.openrouter_api_key,
-        openai_api_base=settings.openrouter_base_url,
-        temperature=0,
-    )
-
-
 async def route_node(state: RAGState) -> dict:
     """Classify query intent: needs document retrieval or direct answer."""
     last_message = state["messages"][-1]
     query = last_message.content if hasattr(last_message, "content") else str(last_message)
 
-    router_llm = _get_router_llm()
+    router_llm = get_router_llm()
 
     response = await router_llm.ainvoke([
         SystemMessage(content='Classify if the query needs document retrieval. Respond with JSON: {"needs_retrieval": true/false}'),
@@ -82,7 +47,7 @@ async def retrieve_node(state: RAGState) -> dict:
     last_message = state["messages"][-1]
     query = last_message.content if hasattr(last_message, "content") else str(last_message)
 
-    vectorstore = _get_vectorstore(state.get("collection_name", "default"))
+    vectorstore = get_vectorstore(state.get("collection_name", "default"))
     docs = await vectorstore.asimilarity_search(query, k=settings.top_k * 2)
 
     if not docs:
@@ -115,7 +80,7 @@ async def generate_node(state: RAGState) -> dict:
     last_message = state["messages"][-1]
     query = last_message.content if hasattr(last_message, "content") else str(last_message)
 
-    llm = _get_llm()
+    llm = get_llm()
 
     if state["route"] == "retrieve" and state.get("context"):
         system_prompt = """You are a research assistant. Answer based ONLY on the provided context. If the context doesn't contain enough information, say "I don't know". Do not invent information."""

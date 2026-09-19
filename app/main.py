@@ -15,7 +15,7 @@ app = FastAPI(title="b-rag-engine2", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=settings.cors_origins_list,
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True,

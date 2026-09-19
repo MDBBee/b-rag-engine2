@@ -19,7 +19,11 @@ class Settings(BaseSettings):
     chunk_overlap: int = 200
     oversized_threshold: int = 2000
     top_k: int = 5
-    cors_origins: list[str] = ["http://localhost:3000"]
+    cors_origins: str = "http://localhost:3000"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
 
 settings = Settings()
