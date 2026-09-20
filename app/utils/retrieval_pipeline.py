@@ -77,24 +77,29 @@ async def retrieve_node(state: RAGState) -> dict:
 
 async def generate_node(state: RAGState) -> dict:
     """Generate answer with streaming support."""
-    last_message = state["messages"][-1]
-    query = last_message.content if hasattr(last_message, "content") else str(last_message)
-
     llm = get_llm()
+    
+    # Get full conversation history
+    conversation_history = state["messages"]
 
     if state["route"] == "retrieve" and state.get("context"):
-        system_prompt = """You are a research assistant. Answer based ONLY on the provided context. If the context doesn't contain enough information, say "I don't know". Do not invent information."""
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=f"Context:\n{state['context']}\n\nQuestion: {query}"),
-        ]
+        # RAG mode: include context in system prompt
+        system_prompt = f"""You are a research assistant specialized in answering questions about uploaded documents.
+
+Answer based ONLY on the provided context. If the context doesn't contain relevant information to answer the question, politely explain that you cannot find the answer in the uploaded documents and suggest the user rephrase their question or ask about different aspects of the documents.
+
+Context:
+{state['context']}"""
+        messages = [SystemMessage(content=system_prompt)] + conversation_history
     else:
+        # Conversational mode: use full conversation history
         today = datetime.now().strftime("%B %d, %Y")
-        system_prompt = f"""You are a helpful assistant. Answer the user's question directly and concisely. Today's date is {today}."""
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=query),
-        ]
+        system_prompt = f"""You are a research assistant specialized in answering questions about uploaded documents.
+
+Your role is to help users understand and extract information from their uploaded documents. If a user asks a question that is outside the scope of document analysis (such as general knowledge questions, opinions, or topics unrelated to their documents), politely explain that you are designed to assist with document-related queries only, and suggest they ask questions about the content of their uploaded documents.
+
+Today's date is {today}."""
+        messages = [SystemMessage(content=system_prompt)] + conversation_history
 
     full_response = ""
     async for chunk in llm.astream(messages):
@@ -152,17 +157,15 @@ async def stream_query(
         rag_pipeline = graph.compile(checkpointer=checkpointer)
 
         config = {"configurable": {"thread_id": thread_id}}
-        initial_state = {
+        input_data = {
             "messages": [HumanMessage(content=query)],
-            "route": "",
-            "context": "",
             "collection_name": collection_name,
         }
 
         sources_yielded = False
 
         async for event in rag_pipeline.astream_events(
-            initial_state,
+            input_data,
             config=config,
             version="v2",
         ):

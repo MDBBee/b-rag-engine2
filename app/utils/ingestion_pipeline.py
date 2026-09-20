@@ -59,7 +59,7 @@ async def ingest_document(file_path: str, filename: str, collection_name: str) -
         count = collection.count()
         logger.info(f"Deleting existing collection: {collection_name} ({count} docs)")
         client.delete_collection(collection_name)
-    except ValueError:
+    except Exception:
         pass
 
     vectorstore = get_vectorstore(collection_name)
