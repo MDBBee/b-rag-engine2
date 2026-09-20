@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any
 from pydantic import BaseModel, Field
 
@@ -36,6 +37,7 @@ class ChatMessage(BaseModel):
 class QueryRequest(BaseModel):
     query: str
     collection_name: str
+    user_id: str
     thread_id: str | None = Field(default=None)
     top_k: int | None = Field(default=None)
     messages: list[ChatMessage] = Field(default_factory=list)
@@ -51,3 +53,15 @@ class SourceChunk(BaseModel):
 class QueryResponse(BaseModel):
     answer: str
     sources: list[SourceChunk] = Field(default_factory=list)
+
+
+class CollectionInfo(BaseModel):
+    collection_name: str
+    chunk_count: int
+    created_at: datetime
+
+
+class CascadeDeleteResponse(BaseModel):
+    deleted_vectors: int
+    deleted_conversations: int
+    deleted_checkpoints: int

@@ -11,10 +11,9 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     embedding_model: str = "text-embedding-3-small"
     llm_model: str = "openai/gpt-4o-mini"
-    router_model: str = "openai/gpt-4o-mini"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    chroma_persist_dir: str = "chroma_db"
-    sqlite_db_path: str = "db/checkpoints.db"
+    mongodb_uri: str = ""
+    mongodb_database: str = "b-rag"
     chunk_size: int = 1000
     chunk_overlap: int = 200
     oversized_threshold: int = 2000

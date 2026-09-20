@@ -1,11 +1,14 @@
 import re
 import uuid
 import tempfile
+import logging
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 
-from app.utils.ingestion_pipeline import ingest_document
+from app.utils.ingestion_pipeline import ingestion_pipeline
 from app.typing.schemas import IngestResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -15,9 +18,9 @@ MAX_COLLECTION_NAME_LENGTH = 40
 
 def filename_to_collection_name(filename: str) -> str:
     """Convert filename to collection name: 'My Thesis.pdf' -> 'my_thesis'"""
-    name = Path(filename).stem  # remove extension
+    name = Path(filename).stem
     name = name.lower()
-    name = re.sub(r'[^a-z0-9]+', '_', name)  # non-alphanumeric → underscore
+    name = re.sub(r'[^a-z0-9]+', '_', name)
     name = name.strip('_')
     if not name:
         return f"doc_{uuid.uuid4().hex[:8]}"
@@ -27,6 +30,7 @@ def filename_to_collection_name(filename: str) -> str:
 @router.post("/ingest", response_model=IngestResponse)
 async def ingest(
     file: UploadFile = File(...),
+    user_id: str = Form(...),
     collection_name: str | None = Form(None),
 ):
     content = await file.read()
@@ -42,14 +46,18 @@ async def ingest(
         tmp_path = tmp.name
 
     try:
-        chunk_count = await ingest_document(tmp_path, file.filename, collection_name)
+        chunk_count, chunks = await ingestion_pipeline(tmp_path, file.filename, collection_name, user_id)
         return IngestResponse(
             status="ok",
             chunk_count=chunk_count,
             collection_name=collection_name,
-            chunks=[],
+            chunks=chunks,
         )
+    except ValueError as e:
+        logger.warning(f"Collection uniqueness violation: {e}")
+        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Ingestion failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Ingestion failed. Please try again.")
     finally:
         Path(tmp_path).unlink(missing_ok=True)

@@ -1,30 +1,38 @@
-import asyncio
 import logging
+from datetime import datetime, timezone
 
-import chromadb
 from markitdown import MarkItDown
 from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownHeaderTextSplitter
-from langchain_chroma import Chroma
 
 from app.config import settings
-from app.utils.factories import get_embeddings, get_vectorstore
+from app.utils import mongodb
+from app.utils.mongodb import check_collection_exists
+from app.typing.schemas import ChunkData
 
 logger = logging.getLogger(__name__)
 
 
-async def ingest_document(file_path: str, filename: str, collection_name: str) -> int:
-    """Convert document to markdown, chunk, and store in vector database."""
-    logger.info(f"Ingesting document: {filename} -> collection: {collection_name}")
+async def ingestion_pipeline(
+    file_path: str,
+    filename: str,
+    collection_name: str,
+    user_id: str,
+) -> tuple[int, list[ChunkData]]:
+    """Convert document to markdown, chunk, and store in MongoDB vector database."""
+    logger.info(f"Ingesting document: {filename} -> collection: {collection_name} (user: {user_id})")
+
+    if await check_collection_exists(user_id, collection_name):
+        raise ValueError(f"Collection '{collection_name}' already exists for user '{user_id}'")
 
     md = MarkItDown()
-    result = await asyncio.to_thread(md.convert, file_path)
+    result = md.convert(file_path)
     markdown_text = result.text_content
     logger.info(f"Converted to markdown: {len(markdown_text)} chars")
 
     header_splitter = MarkdownHeaderTextSplitter(
         headers_to_split_on=[("#", "H1"), ("##", "H2"), ("###", "H3")]
     )
-    header_chunks = await asyncio.to_thread(header_splitter.split_text, markdown_text)
+    header_chunks = header_splitter.split_text(markdown_text)
     logger.info(f"Pass 1 (header split): {len(header_chunks)} chunks")
 
     recursive_splitter = RecursiveCharacterTextSplitter(
@@ -39,7 +47,7 @@ async def ingest_document(file_path: str, filename: str, collection_name: str) -
     for chunk in header_chunks:
         if len(chunk.page_content) > settings.oversized_threshold:
             oversized_count += 1
-            sub_chunks = await asyncio.to_thread(recursive_splitter.split_documents, [chunk])
+            sub_chunks = recursive_splitter.split_documents([chunk])
             final_chunks.extend(sub_chunks)
         else:
             final_chunks.append(chunk)
@@ -53,24 +61,29 @@ async def ingest_document(file_path: str, filename: str, collection_name: str) -
             "total_chunks": len(final_chunks),
         })
 
-    client = chromadb.PersistentClient(path=settings.chroma_persist_dir)
-    try:
-        collection = client.get_collection(collection_name)
-        count = collection.count()
-        logger.info(f"Deleting existing collection: {collection_name} ({count} docs)")
-        client.delete_collection(collection_name)
-    except Exception:
-        pass
+    texts = [chunk.page_content for chunk in final_chunks]
+    embedding_vectors = mongodb.embeddings.embed_documents(texts)
 
-    vectorstore = get_vectorstore(collection_name)
+    now = datetime.now(timezone.utc)
+    docs_to_insert = []
+    for i, (chunk, vector) in enumerate(zip(final_chunks, embedding_vectors)):
+        doc = {
+            "user_id": user_id,
+            "collection_name": collection_name,
+            "chunk_index": i,
+            "content": chunk.page_content,
+            "embedding": vector,
+            "metadata": chunk.metadata,
+            "created_at": now,
+        }
+        docs_to_insert.append(doc)
 
-    await asyncio.to_thread(
-        Chroma.from_documents,
-        documents=final_chunks,
-        embedding=get_embeddings(),
-        persist_directory=settings.chroma_persist_dir,
-        collection_name=collection_name,
-    )
+    await mongodb.vectors.insert_many(docs_to_insert)
+    logger.info(f"Stored {len(docs_to_insert)} chunks in MongoDB (user: {user_id}, collection: {collection_name})")
 
-    logger.info(f"Stored {len(final_chunks)} chunks in collection: {collection_name}")
-    return len(final_chunks)
+    chunks = [
+        ChunkData(text=chunk.page_content, metadata=chunk.metadata)
+        for chunk in final_chunks
+    ]
+
+    return len(docs_to_insert), chunks

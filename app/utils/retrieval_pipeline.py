@@ -1,17 +1,16 @@
 import json
 import uuid
-import aiosqlite
-from pathlib import Path
 from typing import AsyncGenerator, TypedDict, Annotated, Literal
 from datetime import datetime
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.checkpoint.mongodb import MongoDBSaver
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
 
 from app.config import settings
-from app.utils.factories import get_embeddings, get_llm, get_router_llm, get_vectorstore
+from app.utils import mongodb
+from app.utils.mongodb import ensure_conversation_metadata
 
 
 class RAGState(TypedDict):
@@ -19,17 +18,29 @@ class RAGState(TypedDict):
     route: str
     context: str
     collection_name: str
-
+    user_id: str
 
 async def route_node(state: RAGState) -> dict:
     """Classify query intent: needs document retrieval or direct answer."""
     last_message = state["messages"][-1]
     query = last_message.content if hasattr(last_message, "content") else str(last_message)
 
-    router_llm = get_router_llm()
+    response = await mongodb.llm.ainvoke([
+        SystemMessage(content="""Determine if the user's question is about the content of their uploaded documents.
 
-    response = await router_llm.ainvoke([
-        SystemMessage(content='Classify if the query needs document retrieval. Respond with JSON: {"needs_retrieval": true/false}'),
+TRUE (retrieve from documents):
+- Questions about the document's topic, findings, definitions, or data
+- "What does the document say about X?"
+- "Explain the methodology described in the paper"
+- "What are the results mentioned in section 3?"
+
+FALSE (answer directly, no retrieval):
+- General knowledge questions (history, science, current events)
+- "Who is the president of the US?"
+- "What is the capital of France?"
+- Math, coding, opinions, or anything unrelated to the documents
+
+Respond with JSON: {"needs_retrieval": true/false}"""),
         HumanMessage(content=query),
     ])
 
@@ -47,8 +58,11 @@ async def retrieve_node(state: RAGState) -> dict:
     last_message = state["messages"][-1]
     query = last_message.content if hasattr(last_message, "content") else str(last_message)
 
-    vectorstore = get_vectorstore(state.get("collection_name", "default"))
-    docs = await vectorstore.asimilarity_search(query, k=settings.top_k * 2)
+    user_id = state.get("user_id", "")
+    collection_name = state.get("collection_name", "default")
+
+    pre_filter = {"user_id": user_id, "collection_name": collection_name}
+    docs = await mongodb.vectorstore.asimilarity_search(query, k=settings.top_k * 2, pre_filter=pre_filter)
 
     if not docs:
         return {"context": "", "route": "retrieve"}
@@ -77,22 +91,19 @@ async def retrieve_node(state: RAGState) -> dict:
 
 async def generate_node(state: RAGState) -> dict:
     """Generate answer with streaming support."""
-    llm = get_llm()
-    
-    # Get full conversation history
     conversation_history = state["messages"]
 
     if state["route"] == "retrieve" and state.get("context"):
-        # RAG mode: include context in system prompt
         system_prompt = f"""You are a research assistant specialized in answering questions about uploaded documents.
 
-Answer based ONLY on the provided context. If the context doesn't contain relevant information to answer the question, politely explain that you cannot find the answer in the uploaded documents and suggest the user rephrase their question or ask about different aspects of the documents.
+Answer based ONLY on the provided context. 
+
+IMPORTANT: If the retrieved context is not relevant to answering the question, do NOT answer from your general knowledge. Instead, politely state that the answer cannot be found in the uploaded documents and suggest the user ask about topics covered in their documents.
 
 Context:
 {state['context']}"""
         messages = [SystemMessage(content=system_prompt)] + conversation_history
     else:
-        # Conversational mode: use full conversation history
         today = datetime.now().strftime("%B %d, %Y")
         system_prompt = f"""You are a research assistant specialized in answering questions about uploaded documents.
 
@@ -102,7 +113,7 @@ Today's date is {today}."""
         messages = [SystemMessage(content=system_prompt)] + conversation_history
 
     full_response = ""
-    async for chunk in llm.astream(messages):
+    async for chunk in mongodb.llm.astream(messages):
         full_response += chunk.content
 
     return {"messages": [AIMessage(content=full_response)]}
@@ -114,7 +125,7 @@ def route_decision(state: RAGState) -> Literal["retrieve", "generate"]:
 
 
 def build_graph():
-    """Build and compile the RAG graph with checkpointer."""
+    """Build and compile the RAG graph."""
     graph = (
         StateGraph(RAGState)
         .add_node("router", route_node)
@@ -129,20 +140,15 @@ def build_graph():
     return graph
 
 
-async def get_checkpointer() -> AsyncSqliteSaver:
-    """Create and return an async SQLite checkpointer."""
-    db_path = Path(settings.sqlite_db_path)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-
-    conn = await aiosqlite.connect(str(db_path))
-    checkpointer = AsyncSqliteSaver(conn)
-    await checkpointer.setup()
-    return checkpointer
+def get_checkpointer() -> MongoDBSaver:
+    """Create and return a MongoDB checkpointer using shared sync client."""
+    return MongoDBSaver(mongodb.sync_client, db_name=settings.mongodb_database)
 
 
 async def stream_query(
     query: str,
     collection_name: str,
+    user_id: str,
     thread_id: str | None = None,
     retrieval_settings=None,
 ) -> AsyncGenerator[tuple[str, str | list[dict]], None]:
@@ -150,56 +156,55 @@ async def stream_query(
     if thread_id is None:
         thread_id = str(uuid.uuid4())
 
+    await ensure_conversation_metadata(user_id, collection_name, thread_id)
+
     graph = build_graph()
-    checkpointer = await get_checkpointer()
+    checkpointer = get_checkpointer()
 
-    try:
-        rag_pipeline = graph.compile(checkpointer=checkpointer)
+    rag_pipeline = graph.compile(checkpointer=checkpointer)
 
-        config = {"configurable": {"thread_id": thread_id}}
-        input_data = {
-            "messages": [HumanMessage(content=query)],
-            "collection_name": collection_name,
-        }
+    config = {"configurable": {"thread_id": thread_id}}
+    input_data = {
+        "messages": [HumanMessage(content=query)],
+        "collection_name": collection_name,
+        "user_id": user_id,
+    }
 
-        sources_yielded = False
+    sources_yielded = False
 
-        async for event in rag_pipeline.astream_events(
-            input_data,
-            config=config,
-            version="v2",
-        ):
-            if event["event"] == "on_chat_model_stream":
-                metadata = event.get("metadata", {})
-                if metadata.get("langgraph_node") == "generate":
-                    chunk = event["data"].get("chunk")
-                    if chunk and chunk.content:
-                        if not sources_yielded:
-                            yield ("sources", [])
-                            sources_yielded = True
-                        yield ("token", chunk.content)
-
-            elif event["event"] == "on_chain_end":
-                metadata = event.get("metadata", {})
-                if metadata.get("langgraph_node") == "retrieve":
-                    output = event.get("data", {}).get("output", {})
-                    retrieved_docs = output.get("retrieved_docs", [])
-                    if retrieved_docs and not sources_yielded:
-                        sources = [
-                            {
-                                "chunk_id": str(doc.metadata.get("chunk_index", i)),
-                                "content_preview": doc.page_content[:200],
-                                "source": doc.metadata.get("source"),
-                            }
-                            for i, doc in enumerate(retrieved_docs)
-                        ]
-                        yield ("sources", sources)
+    async for event in rag_pipeline.astream_events(
+        input_data,
+        config=config,
+        version="v2",
+    ):
+        if event["event"] == "on_chat_model_stream":
+            metadata = event.get("metadata", {})
+            if metadata.get("langgraph_node") == "generate":
+                chunk = event["data"].get("chunk")
+                if chunk and chunk.content:
+                    if not sources_yielded:
+                        yield ("sources", [])
                         sources_yielded = True
+                    yield ("token", chunk.content)
 
-        if not sources_yielded:
-            yield ("sources", [])
+        elif event["event"] == "on_chain_end":
+            metadata = event.get("metadata", {})
+            if metadata.get("langgraph_node") == "retrieve":
+                output = event.get("data", {}).get("output", {})
+                retrieved_docs = output.get("retrieved_docs", [])
+                if retrieved_docs and not sources_yielded:
+                    sources = [
+                        {
+                            "chunk_id": str(doc.metadata.get("chunk_index", i)),
+                            "content_preview": doc.page_content[:300],
+                            "source": doc.metadata.get("source"),
+                        }
+                        for i, doc in enumerate(retrieved_docs)
+                    ]
+                    yield ("sources", sources)
+                    sources_yielded = True
 
-        yield ("done", None)
+    if not sources_yielded:
+        yield ("sources", [])
 
-    finally:
-        await checkpointer.conn.close()
+    yield ("done", None)

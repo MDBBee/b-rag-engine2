@@ -1,9 +1,12 @@
 import json
+import logging
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.utils.retrieval_pipeline import stream_query
+from app.utils.retrieval_pipeline import retrieval_pipeline
 from app.typing.schemas import QueryRequest
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -12,9 +15,10 @@ router = APIRouter()
 async def query_stream(request: QueryRequest):
     async def event_stream():
         try:
-            async for event_type, data in stream_query(
+            async for event_type, data in retrieval_pipeline(
                 query=request.query,
                 collection_name=request.collection_name,
+                user_id=request.user_id,
                 thread_id=request.thread_id,
                 retrieval_settings=request.retrieval_settings,
             ):
@@ -25,6 +29,7 @@ async def query_stream(request: QueryRequest):
                 elif event_type == "done":
                     yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+            logger.error(f"Query stream failed: {e}", exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'error': 'Query failed. Please try again.'})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
