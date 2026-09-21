@@ -1,10 +1,11 @@
 import json
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 
 from app.utils.retrieval_pipeline import retrieval_pipeline
 from app.typing.schemas import QueryRequest
+from app.middleware.auth import get_current_user, UserInfo
 
 logger = logging.getLogger(__name__)
 
@@ -12,13 +13,13 @@ router = APIRouter()
 
 
 @router.post("/query/stream")
-async def query_stream(request: QueryRequest):
+async def query_stream(request: QueryRequest, user: UserInfo = Depends(get_current_user)):
     async def event_stream():
         try:
             async for event_type, data in retrieval_pipeline(
                 query=request.query,
                 collection_name=request.collection_name,
-                user_id=request.user_id,
+                user_id=user.id,
                 thread_id=request.thread_id,
                 retrieval_settings=request.retrieval_settings,
             ):

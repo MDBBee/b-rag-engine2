@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -25,7 +26,7 @@ async def ingestion_pipeline(
         raise ValueError(f"Collection '{collection_name}' already exists for user '{user_id}'")
 
     md = MarkItDown()
-    result = md.convert(file_path)
+    result = await asyncio.to_thread(md.convert, file_path)
     markdown_text = result.text_content
     logger.info(f"Converted to markdown: {len(markdown_text)} chars")
 
@@ -62,7 +63,19 @@ async def ingestion_pipeline(
         })
 
     texts = [chunk.page_content for chunk in final_chunks]
-    embedding_vectors = mongodb.embeddings.embed_documents(texts)
+    logger.info(f"Embedding {len(texts)} chunks...")
+    
+    for attempt in range(2):
+        try:
+            embedding_vectors = await asyncio.wait_for(
+                asyncio.to_thread(mongodb.embeddings.embed_documents, texts),
+                timeout=120.0
+            )
+            break
+        except Exception as e:
+            if attempt == 1:
+                raise
+            logger.warning(f"Embedding attempt {attempt + 1} failed: {e}, retrying...")
 
     now = datetime.now(timezone.utc)
     docs_to_insert = []

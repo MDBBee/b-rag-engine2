@@ -1,12 +1,14 @@
 import re
 import uuid
+import asyncio
 import tempfile
 import logging
 from pathlib import Path
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 
 from app.utils.ingestion_pipeline import ingestion_pipeline
 from app.typing.schemas import IngestResponse
+from app.middleware.auth import get_current_user, UserInfo
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +32,8 @@ def filename_to_collection_name(filename: str) -> str:
 @router.post("/ingest", response_model=IngestResponse)
 async def ingest(
     file: UploadFile = File(...),
-    user_id: str = Form(...),
     collection_name: str | None = Form(None),
+    user: UserInfo = Depends(get_current_user),
 ):
     content = await file.read()
     if len(content) > MAX_FILE_SIZE:
@@ -46,7 +48,7 @@ async def ingest(
         tmp_path = tmp.name
 
     try:
-        chunk_count, chunks = await ingestion_pipeline(tmp_path, file.filename, collection_name, user_id)
+        chunk_count, chunks = await ingestion_pipeline(tmp_path, file.filename, collection_name, user.id)
         return IngestResponse(
             status="ok",
             chunk_count=chunk_count,
@@ -56,6 +58,9 @@ async def ingest(
     except ValueError as e:
         logger.warning(f"Collection uniqueness violation: {e}")
         raise HTTPException(status_code=409, detail=str(e))
+    except asyncio.TimeoutError:
+        logger.error("Ingestion timed out")
+        raise HTTPException(status_code=504, detail="Ingestion timed out. Please try again.")
     except Exception as e:
         logger.error(f"Ingestion failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Ingestion failed. Please try again.")

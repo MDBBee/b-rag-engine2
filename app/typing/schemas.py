@@ -37,7 +37,6 @@ class ChatMessage(BaseModel):
 class QueryRequest(BaseModel):
     query: str
     collection_name: str
-    user_id: str
     thread_id: str | None = Field(default=None)
     top_k: int | None = Field(default=None)
     messages: list[ChatMessage] = Field(default_factory=list)

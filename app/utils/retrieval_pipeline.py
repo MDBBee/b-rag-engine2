@@ -19,26 +19,34 @@ class RAGState(TypedDict):
     context: str
     collection_name: str
     user_id: str
+    conversational_turns: int
 
 async def route_node(state: RAGState) -> dict:
     """Classify query intent: needs document retrieval or direct answer."""
+    conversational_turns = state.get("conversational_turns", 0)
+    
+    if conversational_turns >= 3:
+        return {"route": "redirect", "conversational_turns": conversational_turns}
+    
     last_message = state["messages"][-1]
     query = last_message.content if hasattr(last_message, "content") else str(last_message)
 
     response = await mongodb.llm.ainvoke([
-        SystemMessage(content="""Determine if the user's question is about the content of their uploaded documents.
+        SystemMessage(content="""Determine if the user's question should be answered from their uploaded documents or answered directly.
 
-TRUE (retrieve from documents):
-- Questions about the document's topic, findings, definitions, or data
-- "What does the document say about X?"
-- "Explain the methodology described in the paper"
-- "What are the results mentioned in section 3?"
+TRUE (retrieve from documents) - DEFAULT for most questions:
+- Any factual, technical, or topic-specific question
+- Questions that COULD be answered by a document (even if not explicitly mentioning "the document")
+- Definitions, explanations, methodology, findings, data
+- Examples: "What is X?", "How does Y work?", "Explain Z", "What are the benefits of..."
 
 FALSE (answer directly, no retrieval):
-- General knowledge questions (history, science, current events)
-- "Who is the president of the US?"
-- "What is the capital of France?"
-- Math, coding, opinions, or anything unrelated to the documents
+- ONLY greetings: "hi", "hello", "hey", "good morning"
+- ONLY thanks/gratitude: "thanks", "thank you", "appreciate it"
+- ONLY meta-questions about you: "who are you?", "what can you do?", "how do you work?"
+- ONLY clearly general knowledge with NO possible document connection: "what time is it?", "who is the president of Finland?", "what's the weather?"
+
+When in doubt, choose TRUE (retrieve). It's better to retrieve and find nothing than to answer from general knowledge.
 
 Respond with JSON: {"needs_retrieval": true/false}"""),
         HumanMessage(content=query),
@@ -46,11 +54,14 @@ Respond with JSON: {"needs_retrieval": true/false}"""),
 
     try:
         result = json.loads(response.content)
-        route = "retrieve" if result.get("needs_retrieval", False) else "direct"
+        needs_retrieval = result.get("needs_retrieval", True)
     except (json.JSONDecodeError, AttributeError):
-        route = "retrieve"
+        needs_retrieval = True
 
-    return {"route": route}
+    if needs_retrieval:
+        return {"route": "retrieve", "conversational_turns": 0}
+    else:
+        return {"route": "direct", "conversational_turns": conversational_turns + 1}
 
 
 async def retrieve_node(state: RAGState) -> dict:
@@ -92,8 +103,20 @@ async def retrieve_node(state: RAGState) -> dict:
 async def generate_node(state: RAGState) -> dict:
     """Generate answer with streaming support."""
     conversation_history = state["messages"]
+    route = state["route"]
+    conversational_turns = state.get("conversational_turns", 0)
 
-    if state["route"] == "retrieve" and state.get("context"):
+    if route == "redirect":
+        system_prompt = """You are a research assistant specialized in answering questions about uploaded documents.
+
+The user has asked multiple conversational questions. Politely redirect them to document-related queries.
+
+Example response: "I'm here to help you retrieve information from your uploaded documents. Could you ask me about the content of your documents instead?"
+
+Keep the response brief and friendly."""
+        messages = [SystemMessage(content=system_prompt)] + conversation_history
+        new_turns = conversational_turns + 1
+    elif route == "retrieve" and state.get("context"):
         system_prompt = f"""You are a research assistant specialized in answering questions about uploaded documents.
 
 Answer based ONLY on the provided context. 
@@ -103,6 +126,7 @@ IMPORTANT: If the retrieved context is not relevant to answering the question, d
 Context:
 {state['context']}"""
         messages = [SystemMessage(content=system_prompt)] + conversation_history
+        new_turns = 0
     else:
         today = datetime.now().strftime("%B %d, %Y")
         system_prompt = f"""You are a research assistant specialized in answering questions about uploaded documents.
@@ -111,12 +135,13 @@ Your role is to help users understand and extract information from their uploade
 
 Today's date is {today}."""
         messages = [SystemMessage(content=system_prompt)] + conversation_history
+        new_turns = conversational_turns
 
     full_response = ""
     async for chunk in mongodb.llm.astream(messages):
         full_response += chunk.content
 
-    return {"messages": [AIMessage(content=full_response)]}
+    return {"messages": [AIMessage(content=full_response)], "conversational_turns": new_turns}
 
 
 def route_decision(state: RAGState) -> Literal["retrieve", "generate"]:
@@ -145,7 +170,7 @@ def get_checkpointer() -> MongoDBSaver:
     return MongoDBSaver(mongodb.sync_client, db_name=settings.mongodb_database)
 
 
-async def stream_query(
+async def retrieval_pipeline(
     query: str,
     collection_name: str,
     user_id: str,
