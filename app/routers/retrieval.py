@@ -1,6 +1,6 @@
 import json
 import logging
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from app.utils.retrieval_pipeline import retrieval_pipeline
@@ -14,13 +14,15 @@ router = APIRouter()
 
 @router.post("/query/stream")
 async def query_stream(request: QueryRequest, user: UserInfo = Depends(get_current_user)):
+    print("QUERY:", request)
+
     async def event_stream():
         try:
             async for event_type, data in retrieval_pipeline(
                 query=request.query,
                 collection_name=request.collection_name,
                 user_id=user.id,
-                thread_id=request.thread_id,
+                messages=request.messages,
                 retrieval_settings=request.retrieval_settings,
             ):
                 if event_type == "token":

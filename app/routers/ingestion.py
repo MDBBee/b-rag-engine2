@@ -48,12 +48,16 @@ async def ingest(
         tmp_path = tmp.name
 
     try:
-        chunk_count, chunks = await ingestion_pipeline(tmp_path, file.filename, collection_name, user.id)
+        chunk_count, document_type, no_of_pages, chunks, summarized_chunks = await ingestion_pipeline(
+            tmp_path, file.filename, collection_name, user.id
+        )
         return IngestResponse(
             status="ok",
             chunk_count=chunk_count,
-            collection_name=collection_name,
+            document_type=document_type,
+            no_of_pages=no_of_pages,
             chunks=chunks,
+            summarized_chunks=summarized_chunks,
         )
     except ValueError as e:
         logger.warning(f"Collection uniqueness violation: {e}")

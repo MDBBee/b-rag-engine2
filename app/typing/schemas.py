@@ -18,28 +18,31 @@ class RetrievalSettings(BaseModel):
 
 class ChunkData(BaseModel):
     text: str
+    types: list[str] = Field(default_factory=lambda: ["text"])
+    tables: list[str] = Field(default_factory=list)
+    images: list[str] = Field(default_factory=list)
+
+
+class SummarizedChunk(BaseModel):
+    page_content: str
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class IngestResponse(BaseModel):
     status: str
     chunk_count: int
-    collection_name: str
+    document_type: str
+    no_of_pages: int = 0
     chunks: list[ChunkData] = Field(default_factory=list)
+    summarized_chunks: list[SummarizedChunk] = Field(default_factory=list)
     detail: str | None = Field(default=None)
-
-
-class ChatMessage(BaseModel):
-    role: str
-    content: str
 
 
 class QueryRequest(BaseModel):
     query: str
     collection_name: str
-    thread_id: str | None = Field(default=None)
     top_k: int | None = Field(default=None)
-    messages: list[ChatMessage] = Field(default_factory=list)
+    messages: list[dict] = Field(default_factory=list)
     retrieval_settings: RetrievalSettings | None = Field(default=None)
 
 
@@ -62,5 +65,15 @@ class CollectionInfo(BaseModel):
 
 class CascadeDeleteResponse(BaseModel):
     deleted_vectors: int
-    deleted_conversations: int
-    deleted_checkpoints: int
+
+
+class ChunkResponse(BaseModel):
+    id: str
+    text: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CollectionChunksResponse(BaseModel):
+    collection_name: str
+    chunk_count: int
+    chunks: list[ChunkResponse] = Field(default_factory=list)

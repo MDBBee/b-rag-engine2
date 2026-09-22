@@ -1,16 +1,12 @@
 import json
-import uuid
-from typing import AsyncGenerator, TypedDict, Annotated, Literal
-from datetime import datetime
+from typing import Annotated, AsyncGenerator, TypedDict, Literal
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
-from langgraph.checkpoint.mongodb import MongoDBSaver
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage
 
 from app.config import settings
 from app.utils import mongodb
-from app.utils.mongodb import ensure_conversation_metadata
 
 
 class RAGState(TypedDict):
@@ -19,34 +15,33 @@ class RAGState(TypedDict):
     context: str
     collection_name: str
     user_id: str
-    conversational_turns: int
+    retrieved_docs: list
+
 
 async def route_node(state: RAGState) -> dict:
     """Classify query intent: needs document retrieval or direct answer."""
-    conversational_turns = state.get("conversational_turns", 0)
-    
-    if conversational_turns >= 3:
-        return {"route": "redirect", "conversational_turns": conversational_turns}
-    
-    last_message = state["messages"][-1]
-    query = last_message.content if hasattr(last_message, "content") else str(last_message)
+    messages = state["messages"]
+    query = messages[-1].content if messages else ""
 
     response = await mongodb.llm.ainvoke([
         SystemMessage(content="""Determine if the user's question should be answered from their uploaded documents or answered directly.
 
-TRUE (retrieve from documents) - DEFAULT for most questions:
-- Any factual, technical, or topic-specific question
-- Questions that COULD be answered by a document (even if not explicitly mentioning "the document")
-- Definitions, explanations, methodology, findings, data
-- Examples: "What is X?", "How does Y work?", "Explain Z", "What are the benefits of..."
+TRUE (retrieve from documents):
+- Questions about document content, findings, methodology, data, recommendations
+- Technical questions related to the document's topic
+- Questions that reference "the document", "the thesis", "the paper", "the research"
+- Questions about specific topics that might be in the documents
+- Examples: "What is X?", "How does Y work?", "What are the benefits?", "Were there any recommendations?"
 
 FALSE (answer directly, no retrieval):
-- ONLY greetings: "hi", "hello", "hey", "good morning"
-- ONLY thanks/gratitude: "thanks", "thank you", "appreciate it"
-- ONLY meta-questions about you: "who are you?", "what can you do?", "how do you work?"
-- ONLY clearly general knowledge with NO possible document connection: "what time is it?", "who is the president of Finland?", "what's the weather?"
+- Greetings: "hi", "hello", "hey", "good morning"
+- Thanks/gratitude: "thanks", "thank you"
+- Questions about the conversation itself: "what is my name?", "what was my last question?", "do you remember?"
+- Meta-questions about you: "who are you?", "what can you do?"
+- Personal questions: "my name is X", "I am from Y"
+- General knowledge unrelated to documents: "what time is it?", "who is the president?", "what's the weather?"
 
-When in doubt, choose TRUE (retrieve). It's better to retrieve and find nothing than to answer from general knowledge.
+When in doubt, choose TRUE (retrieve).
 
 Respond with JSON: {"needs_retrieval": true/false}"""),
         HumanMessage(content=query),
@@ -58,17 +53,13 @@ Respond with JSON: {"needs_retrieval": true/false}"""),
     except (json.JSONDecodeError, AttributeError):
         needs_retrieval = True
 
-    if needs_retrieval:
-        return {"route": "retrieve", "conversational_turns": 0}
-    else:
-        return {"route": "direct", "conversational_turns": conversational_turns + 1}
+    return {"route": "retrieve" if needs_retrieval else "direct"}
 
 
 async def retrieve_node(state: RAGState) -> dict:
     """Retrieve relevant documents from vector store with deduplication."""
-    last_message = state["messages"][-1]
-    query = last_message.content if hasattr(last_message, "content") else str(last_message)
-
+    messages = state["messages"]
+    query = messages[-1].content if messages else ""
     user_id = state.get("user_id", "")
     collection_name = state.get("collection_name", "default")
 
@@ -102,46 +93,36 @@ async def retrieve_node(state: RAGState) -> dict:
 
 async def generate_node(state: RAGState) -> dict:
     """Generate answer with streaming support."""
-    conversation_history = state["messages"]
     route = state["route"]
-    conversational_turns = state.get("conversational_turns", 0)
+    messages = state["messages"]
 
-    if route == "redirect":
-        system_prompt = """You are a research assistant specialized in answering questions about uploaded documents.
+    if route == "retrieve" and state.get("context"):
+        system_prompt = f"""You are a helpful research assistant. Answer questions based on the provided document context and conversation history.
 
-The user has asked multiple conversational questions. Politely redirect them to document-related queries.
-
-Example response: "I'm here to help you retrieve information from your uploaded documents. Could you ask me about the content of your documents instead?"
-
-Keep the response brief and friendly."""
-        messages = [SystemMessage(content=system_prompt)] + conversation_history
-        new_turns = conversational_turns + 1
-    elif route == "retrieve" and state.get("context"):
-        system_prompt = f"""You are a research assistant specialized in answering questions about uploaded documents.
-
-Answer based ONLY on the provided context. 
-
-IMPORTANT: If the retrieved context is not relevant to answering the question, do NOT answer from your general knowledge. Instead, politely state that the answer cannot be found in the uploaded documents and suggest the user ask about topics covered in their documents.
+Guidelines:
+- Use the document context to answer questions about the documents
+- Use conversation history to remember what the user has told you (their name, preferences, previous questions)
+- If the context doesn't contain relevant information, you can answer from general knowledge or conversation history
+- Be conversational and natural, not robotic
 
 Context:
 {state['context']}"""
-        messages = [SystemMessage(content=system_prompt)] + conversation_history
-        new_turns = 0
     else:
-        today = datetime.now().strftime("%B %d, %Y")
-        system_prompt = f"""You are a research assistant specialized in answering questions about uploaded documents.
+        system_prompt = """You are a friendly and helpful research assistant. You help users with their documents and engage in natural conversation.
 
-Your role is to help users understand and extract information from their uploaded documents. If a user asks a question that is outside the scope of document analysis (such as general knowledge questions, opinions, or topics unrelated to their documents), politely explain that you are designed to assist with document-related queries only, and suggest they ask questions about the content of their uploaded documents.
+Guidelines:
+- Use conversation history to remember what the user has told you (their name, preferences, previous questions)
+- Answer general knowledge questions naturally and helpfully
+- Be conversational, warm, and engaging
+- If asked about documents, suggest the user upload documents or ask specific questions about their topic"""
 
-Today's date is {today}."""
-        messages = [SystemMessage(content=system_prompt)] + conversation_history
-        new_turns = conversational_turns
+    llm_messages = [SystemMessage(content=system_prompt)] + messages
 
     full_response = ""
-    async for chunk in mongodb.llm.astream(messages):
+    async for chunk in mongodb.llm.astream(llm_messages):
         full_response += chunk.content
 
-    return {"messages": [AIMessage(content=full_response)], "conversational_turns": new_turns}
+    return {"messages": [AIMessage(content=full_response)]}
 
 
 def route_decision(state: RAGState) -> Literal["retrieve", "generate"]:
@@ -165,32 +146,22 @@ def build_graph():
     return graph
 
 
-def get_checkpointer() -> MongoDBSaver:
-    """Create and return a MongoDB checkpointer using shared sync client."""
-    return MongoDBSaver(mongodb.sync_client, db_name=settings.mongodb_database)
-
-
 async def retrieval_pipeline(
     query: str,
     collection_name: str,
     user_id: str,
-    thread_id: str | None = None,
+    messages: list[dict] = None,
     retrieval_settings=None,
 ) -> AsyncGenerator[tuple[str, str | list[dict]], None]:
-    """Stream RAG response with conversation memory."""
-    if thread_id is None:
-        thread_id = str(uuid.uuid4())
-
-    await ensure_conversation_metadata(user_id, collection_name, thread_id)
+    """Stream RAG response with conversation history from frontend."""
+    history = convert_messages(messages or [])
+    all_messages = history + [HumanMessage(content=query)]
 
     graph = build_graph()
-    checkpointer = get_checkpointer()
+    rag_pipeline = graph.compile()
 
-    rag_pipeline = graph.compile(checkpointer=checkpointer)
-
-    config = {"configurable": {"thread_id": thread_id}}
     input_data = {
-        "messages": [HumanMessage(content=query)],
+        "messages": all_messages,
         "collection_name": collection_name,
         "user_id": user_id,
     }
@@ -199,7 +170,6 @@ async def retrieval_pipeline(
 
     async for event in rag_pipeline.astream_events(
         input_data,
-        config=config,
         version="v2",
     ):
         if event["event"] == "on_chat_model_stream":
@@ -233,3 +203,16 @@ async def retrieval_pipeline(
         yield ("sources", [])
 
     yield ("done", None)
+
+
+def convert_messages(messages: list[dict]) -> list[BaseMessage]:
+    """Convert frontend messages to LangChain BaseMessage objects."""
+    result = []
+    for msg in messages:
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+        if role == "user":
+            result.append(HumanMessage(content=content))
+        elif role == "assistant":
+            result.append(AIMessage(content=content))
+    return result
