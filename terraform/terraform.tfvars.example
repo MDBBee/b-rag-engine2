@@ -1,0 +1,5 @@
+region        = "eu-north-1"
+domain        = "yourdomain.com"
+key_name      = "brag-key"
+your_ip       = "1.2.3.4/32"
+instance_type = "t3.micro"

@@ -32,6 +32,7 @@ wheels/
 
 # Jupyter Notebook
 .ipynb_checkpoints/
+*.ipynb
 
 # ChromaDB persistent storage
 chroma_db/
@@ -55,6 +56,11 @@ Thumbs.db
 # Logs
 *.log
 
-*.ipynb
-AGENTS.md
-PLAN.md
+# Documentation (internal)
+*.md
+!README.md
+*.txt
+
+# Terraform (sensitive)
+terraform/terraform.tfvars
+terraform/.terraform/
