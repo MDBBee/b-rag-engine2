@@ -23,7 +23,9 @@ async def query_stream(request: QueryRequest, user: UserInfo = Depends(get_curre
                 collection_name=request.collection_name,
                 user_id=user.id,
                 messages=request.messages,
-                retrieval_settings=request.retrieval_settings,
+                llm_model=request.llm_model,
+                project_name=request.project_name,
+                file_name=request.file_name,
             ):
                 if event_type == "token":
                     yield f"data: {json.dumps({'type': 'token', 'content': data})}\n\n"

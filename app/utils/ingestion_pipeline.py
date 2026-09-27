@@ -51,6 +51,9 @@ async def ingestion_pipeline(
     filename: str,
     collection_name: str,
     user_id: str,
+    embedding_model: str | None = None,
+    chunk_size: int | None = None,
+    chunk_overlap: int | None = None,
 ) -> tuple[int, str, int, list[ChunkData], list[SummarizedChunk]]:
     """Convert document to markdown, chunk, and store in MongoDB vector database.
     
@@ -77,9 +80,12 @@ async def ingestion_pipeline(
     header_chunks = header_splitter.split_text(markdown_text)
     logger.info(f"Pass 1 (header split): {len(header_chunks)} chunks")
 
+    resolved_chunk_size = chunk_size if chunk_size is not None else settings.chunk_size
+    resolved_chunk_overlap = chunk_overlap if chunk_overlap is not None else settings.chunk_overlap
+
     recursive_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=settings.chunk_size,
-        chunk_overlap=settings.chunk_overlap,
+        chunk_size=resolved_chunk_size,
+        chunk_overlap=resolved_chunk_overlap,
         length_function=len,
         separators=["\n\n", "\n", " ", ""],
     )

@@ -18,9 +18,6 @@ class UserInfo(BaseModel):
 def get_current_user(
     authorization: str | None = Header(None),
 ) -> UserInfo:
-    if not settings.auth_enabled:
-        return UserInfo(id="local", email="admin@local", role="admin")
-
     if not authorization or not authorization.startswith("Bearer "):
         logger.warning("Auth failed: missing or invalid authorization header")
         raise HTTPException(
