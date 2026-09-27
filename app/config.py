@@ -20,7 +20,6 @@ class Settings(BaseSettings):
     top_k: int = 5
     cors_origins: str = "http://localhost:3000"
     auth_secret: str = ""
-    auth_enabled: bool = True
 
     @property
     def cors_origins_list(self) -> list[str]:

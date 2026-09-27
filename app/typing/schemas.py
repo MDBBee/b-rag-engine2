@@ -3,19 +3,6 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
-class IngestionSettings(BaseModel):
-    chunk_size: int | None = Field(default=None)
-    chunk_overlap: int | None = Field(default=None)
-    oversized_threshold: int | None = Field(default=None)
-    embedding_model: str | None = Field(default=None)
-
-
-class RetrievalSettings(BaseModel):
-    top_k: int | None = Field(default=None)
-    llm_model: str | None = Field(default=None)
-    max_retries: int | None = Field(default=None)
-
-
 class ChunkData(BaseModel):
     text: str
     types: list[str] = Field(default_factory=lambda: ["text"])
@@ -43,7 +30,9 @@ class QueryRequest(BaseModel):
     collection_name: str
     top_k: int | None = Field(default=None)
     messages: list[dict] = Field(default_factory=list)
-    retrieval_settings: RetrievalSettings | None = Field(default=None)
+    llm_model: str | None = Field(default=None)
+    project_name: str | None = Field(default=None)
+    file_name: str | None = Field(default=None)
 
 
 class SourceChunk(BaseModel):

@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from typing import Annotated, AsyncGenerator, TypedDict, Literal
 
 from langgraph.graph import StateGraph, START, END
@@ -15,6 +16,8 @@ class RAGState(TypedDict):
     context: str
     collection_name: str
     user_id: str
+    project_name: str
+    file_name: str
     retrieved_docs: list
 
 
@@ -95,9 +98,21 @@ async def generate_node(state: RAGState) -> dict:
     """Generate answer with streaming support."""
     route = state["route"]
     messages = state["messages"]
+    project_name = state.get("project_name", "")
+    file_name = state.get("file_name", "")
+    today = datetime.now().strftime("%B %d, %Y")
+
+    context_prefix = ""
+    if project_name or file_name:
+        parts = []
+        if project_name:
+            parts.append(f'project "{project_name}"')
+        if file_name:
+            parts.append(f'document "{file_name}"')
+        context_prefix = f"You are assisting with {' and '.join(parts)}. Today's date is {today}. "
 
     if route == "retrieve" and state.get("context"):
-        system_prompt = f"""You are a helpful research assistant. Answer questions based on the provided document context and conversation history.
+        system_prompt = f"""{context_prefix}You are a helpful research assistant. Answer questions based on the provided document context and conversation history.
 
 Guidelines:
 - Use the document context to answer questions about the documents
@@ -108,7 +123,7 @@ Guidelines:
 Context:
 {state['context']}"""
     else:
-        system_prompt = """You are a friendly and helpful research assistant. You help users with their documents and engage in natural conversation.
+        system_prompt = f"""{context_prefix}You are a friendly and helpful research assistant. You help users with their documents and engage in natural conversation.
 
 Guidelines:
 - Use conversation history to remember what the user has told you (their name, preferences, previous questions)
@@ -151,7 +166,9 @@ async def retrieval_pipeline(
     collection_name: str,
     user_id: str,
     messages: list[dict] = None,
-    retrieval_settings=None,
+    llm_model: str | None = None,
+    project_name: str | None = None,
+    file_name: str | None = None,
 ) -> AsyncGenerator[tuple[str, str | list[dict]], None]:
     """Stream RAG response with conversation history from frontend."""
     history = convert_messages(messages or [])
@@ -164,6 +181,8 @@ async def retrieval_pipeline(
         "messages": all_messages,
         "collection_name": collection_name,
         "user_id": user_id,
+        "project_name": project_name or "",
+        "file_name": file_name or "",
     }
 
     sources_yielded = False
