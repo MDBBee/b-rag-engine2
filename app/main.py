@@ -26,6 +26,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="b-rag-engine2", version="0.1.0", lifespan=lifespan)
 
+logger.info(f"CORS origins configured: {settings.cors_origins_list}")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
@@ -33,6 +35,18 @@ app.add_middleware(
     allow_headers=["*"],
     allow_credentials=False,
 )
+
+
+@app.middleware("http")
+async def log_cors_debug(request: Request, call_next):
+    origin = request.headers.get("origin")
+    if origin:
+        logger.info(f"Request from origin: {origin}, path: {request.url.path}")
+    response = await call_next(request)
+    if origin:
+        cors_header = response.headers.get("access-control-allow-origin")
+        logger.info(f"CORS response for {origin}: allow-origin={cors_header}")
+    return response
 
 
 @app.exception_handler(HTTPException)
