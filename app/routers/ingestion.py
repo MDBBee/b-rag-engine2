@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-MAX_FILE_SIZE = 50 * 1024 * 1024
+MAX_FILE_SIZE = 1500 * 1024  # 1,500 KB
 MAX_COLLECTION_NAME_LENGTH = 40
 
 
@@ -40,7 +40,10 @@ async def ingest(
 ):
     content = await file.read()
     if len(content) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=413, detail=f"File too large. Max size: {MAX_FILE_SIZE // (1024*1024)}MB")
+        raise HTTPException(
+            status_code=413,
+            detail="Sorry! At the moment we are running a tiny fraction of a core with quite limited memory and storage, we can only process feeds less than 1,500kb."
+        )
 
     if not collection_name:
         collection_name = filename_to_collection_name(file.filename)
