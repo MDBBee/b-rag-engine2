@@ -67,6 +67,18 @@ jobs:
         run: terraform plan -no-color -out=tfplan
         continue-on-error: true
 
+      - name: Cleanup stale locks on failure
+        if: failure() && steps.plan.outcome == 'failure'
+        run: |
+          if [ -f .terraform/terraform.tfstate.lock.info ]; then
+            LOCK_ID=$(jq -r '.ID' .terraform/terraform.tfstate.lock.info)
+            echo "Found stale lock: $LOCK_ID"
+            terraform force-unlock -force "$LOCK_ID" || echo "Failed to unlock, may already be released"
+          else
+            echo "No lock file found, nothing to clean up"
+          fi
+        continue-on-error: true
+
       - name: Comment PR with Plan
         uses: actions/github-script@v7
         if: always()
