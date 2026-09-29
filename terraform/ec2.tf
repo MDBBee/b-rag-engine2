@@ -26,24 +26,11 @@ resource "aws_instance" "backend" {
   vpc_security_group_ids = [aws_security_group.backend.id]
   iam_instance_profile   = aws_iam_instance_profile.backend.name
 
-  user_data = <<-EOF
-                #!/bin/bash
-                set -e
-
-                echo "=== Installing Docker ==="
-                yum update -y
-                yum install -y docker
-                systemctl enable docker
-                systemctl start docker
-                usermod -aG docker ec2-user
-
-                echo "=== Docker installation complete ==="
-                echo "Next steps:"
-                echo "1. SSH in and install Caddy manually"
-                echo "2. Build and push Docker image to ECR"
-                echo "3. Pull image and run container"
-              EOF
-
+  user_data = templatefile("${path.module}/user-data.sh", {
+    region     = var.region
+    api_domain = var.api_domain
+    ecr_url    = aws_ecr_repository.backend.repository_url
+  })
 
   root_block_device {
     volume_size = 20
@@ -55,6 +42,7 @@ resource "aws_instance" "backend" {
   }
 
   depends_on = [
-    aws_internet_gateway.igw
+    aws_internet_gateway.igw,
+    aws_ecr_repository.backend
   ]
 }

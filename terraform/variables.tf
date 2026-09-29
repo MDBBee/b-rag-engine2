@@ -26,3 +26,8 @@ variable "instance_type" {
   type        = string
   default     = "t3.micro"
 }
+
+variable "api_domain" {
+  description = "API domain for backend (no protocol, e.g., api-brag.bobbyugbebor.store)"
+  type        = string
+}

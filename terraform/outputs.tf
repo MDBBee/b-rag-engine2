@@ -27,3 +27,8 @@ output "cloudflare_ips" {
   description = "CURRENT CLOUDFLARE IPS"
   value       = local.cloudflare_ipv4
 }
+
+output "api_domain" {
+  description = "API domain for backend"
+  value       = var.api_domain
+}

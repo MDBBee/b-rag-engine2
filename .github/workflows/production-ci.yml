@@ -1,0 +1,117 @@
+name: Main CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Lint backend
+        run: uv run ruff check app/
+
+  acceptance-test:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # === BUILD PHASE ===
+      - name: Build backend Docker image
+        run: docker build --target prod -t b-rag-engine2:latest .
+
+      # === CONFIGURATION PHASE ===
+      - name: Configure backend environment
+        run: |
+          mkdir -p b-rag-engine2
+          cat > b-rag-engine2/.env << EOF
+          MONGODB_URI=${{ secrets.MONGODB_URI }}
+          OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
+          AUTH_SECRET=${{ secrets.AUTH_SECRET }}
+          CORS_ORIGINS=http://localhost:3000
+          AUTH_ENABLED=false
+          RATE_LIMIT_ENABLED=false
+          EOF
+
+      - name: Configure frontend environment
+        run: |
+          mkdir -p b-rag-view
+          cat > b-rag-view/.env << EOF
+          DATABASE_URL=${{ secrets.DATABASE_URL }}
+          AUTH_SECRET=${{ secrets.AUTH_SECRET }}
+          AUTH_TRUST_HOST=true
+          NEXTAUTH_URL=http://localhost:3000
+          API_URL=http://backend:8000
+          NEXT_PUBLIC_TESTING=true
+          TESTING_CODE=${{ secrets.TESTING_CODE }}
+          EOF
+
+      # === SETUP PHASE ===
+      - name: Start application services
+        run: docker compose -p b-rag up -d
+
+      - name: Wait for services to be ready
+        run: |
+          timeout 60 bash -c 'until curl -sf http://localhost:8000/health; do sleep 2; done'
+          timeout 60 bash -c 'until curl -sf http://localhost:3000; do sleep 2; done'
+          sleep 10
+
+      # === TEST PREPARATION PHASE ===
+      - name: Clone acceptance test repository
+        run: git clone https://github.com/MDBBee/acceptance-test-b-rag.git acceptance-tests
+
+      - name: Install Python test runner
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python 3.14
+        run: uv python install 3.14
+        working-directory: ./acceptance-tests
+
+      - name: Install test dependencies
+        run: uv sync
+        working-directory: ./acceptance-tests
+
+      # === TEST EXECUTION PHASE ===
+      - name: Run Robot Framework acceptance tests
+        run: uv run robot --outputdir results tests/
+        working-directory: ./acceptance-tests
+        env:
+          BASE_URL: http://localhost:3000
+          TEST_EMAIL: ${{ secrets.TEST_EMAIL }}
+          TEST_CODE: ${{ secrets.TESTING_CODE }}
+          TEST_PDF_PATH: ${{ github.workspace }}/acceptance-tests/data/attension-paper.pdf
+          TESTER_NAME: ${{ secrets.TESTER_NAME }}
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: robot-results
+          path: acceptance-tests/results/
+
+      # === CLEANUP PHASE ===
+      - name: Tear down application services
+        if: always()
+        run: docker compose -p b-rag down

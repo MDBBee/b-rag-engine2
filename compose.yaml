@@ -1,0 +1,22 @@
+services:
+  frontend:
+    image: bobbyugbebor/b-rag-view:1.0.1
+    env_file:
+      - ./b-rag-view/.env
+    ports:
+      - "3000:3000"
+    networks:
+      - b-rag-network
+
+  backend:
+    image: b-rag-engine2
+    env_file:
+      - ./b-rag-engine2/.env
+    ports:
+      - "8000:8000"
+    networks:
+      - b-rag-network
+
+networks:
+  b-rag-network:
+    driver: bridge
