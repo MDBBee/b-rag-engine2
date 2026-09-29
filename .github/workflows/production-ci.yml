@@ -3,6 +3,11 @@ name: Main CI
 on:
   push:
     branches: [main]
+    paths:
+      - "app/**"
+      - "Dockerfile"
+      - "pyproject.toml"
+      - "uv.lock"
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -12,7 +17,9 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
+  id-token: write
   contents: read
+  pull-requests: write
 
 jobs:
   lint:
@@ -31,6 +38,59 @@ jobs:
 
       - name: Lint backend
         run: uv run ruff check app/
+
+  terraform-plan:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./terraform
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: eu-north-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~> 1.15"
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        id: plan
+        run: terraform plan -no-color -out=tfplan
+        continue-on-error: true
+
+      - name: Comment PR with Plan
+        uses: actions/github-script@v7
+        if: always()
+        with:
+          script: |
+            const output = `#### Terraform Plan Results
+            **Status:** ${{ steps.plan.outcome == 'success' && '✅ Success' || '❌ Failed' }}
+
+            <details><summary>Show Plan Output</summary>
+
+            \`\`\`
+            ${{ steps.plan.outputs.stdout || steps.plan.outputs.stderr }}
+            \`\`\`
+
+            </details>
+
+            *Pushed by: @${{ github.actor }}, Action: ${{ github.event_name }}*`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
 
   acceptance-test:
     needs: lint
