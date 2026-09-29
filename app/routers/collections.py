@@ -1,13 +1,18 @@
 import logging
-from fastapi import APIRouter, HTTPException, Depends, Query
 
+from fastapi import APIRouter, Depends, HTTPException
+
+from app.middleware.auth import UserInfo, get_current_user
+from app.typing.schemas import (
+    CascadeDeleteResponse,
+    CollectionChunksResponse,
+    CollectionInfo,
+)
 from app.utils.mongodb import (
-    list_collections,
     delete_collection_cascade,
     get_collection_chunks,
+    list_collections,
 )
-from app.typing.schemas import CollectionInfo, CascadeDeleteResponse, CollectionChunksResponse
-from app.middleware.auth import get_current_user, UserInfo
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +25,8 @@ async def get_collections(user: UserInfo = Depends(get_current_user)):
     try:
         collections = await list_collections(user.id)
         return collections
-    except Exception as e:
-        logger.error(f"Failed to list collections: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Failed to list collections")
         raise HTTPException(status_code=500, detail="Failed to list collections")
 
 
@@ -35,8 +40,8 @@ async def get_chunks(collection_name: str, user: UserInfo = Depends(get_current_
         return result
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Failed to fetch chunks: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Failed to fetch chunks")
         raise HTTPException(status_code=500, detail="Failed to fetch chunks")
 
 
@@ -50,6 +55,6 @@ async def delete_collection(collection_name: str, user: UserInfo = Depends(get_c
         return result
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Failed to delete collection: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Failed to delete collection")
         raise HTTPException(status_code=500, detail="Failed to delete collection")

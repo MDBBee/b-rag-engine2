@@ -1,14 +1,14 @@
-import re
-import uuid
-import asyncio
-import tempfile
 import logging
+import re
+import tempfile
+import uuid
 from pathlib import Path
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 
-from app.utils.ingestion_pipeline import ingestion_pipeline
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+
+from app.middleware.auth import UserInfo, get_current_user
 from app.typing.schemas import IngestResponse
-from app.middleware.auth import get_current_user, UserInfo
+from app.utils.ingestion_pipeline import ingestion_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -71,11 +71,11 @@ async def ingest(
     except ValueError as e:
         logger.warning(f"Collection uniqueness violation: {e}")
         raise HTTPException(status_code=409, detail=str(e))
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.error("Ingestion timed out")
         raise HTTPException(status_code=504, detail="Ingestion timed out. Please try again.")
-    except Exception as e:
-        logger.error(f"Ingestion failed: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Ingestion failed")
         raise HTTPException(status_code=500, detail="Ingestion failed. Please try again.")
     finally:
         Path(tmp_path).unlink(missing_ok=True)

@@ -1,10 +1,11 @@
 import json
-from datetime import datetime
-from typing import Annotated, AsyncGenerator, TypedDict, Literal
+from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
+from typing import Annotated, Literal, TypedDict
 
-from langgraph.graph import StateGraph, START, END
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage
 
 from app.config import settings
 from app.utils import mongodb
@@ -100,7 +101,7 @@ async def generate_node(state: RAGState) -> dict:
     messages = state["messages"]
     project_name = state.get("project_name", "")
     file_name = state.get("file_name", "")
-    today = datetime.now().strftime("%B %d, %Y")
+    today = datetime.now(tz=UTC).strftime("%B %d, %Y")
 
     context_prefix = ""
     if project_name or file_name:
@@ -165,7 +166,7 @@ async def retrieval_pipeline(
     query: str,
     collection_name: str,
     user_id: str,
-    messages: list[dict] = None,
+    messages: list[dict] | None = None,
     llm_model: str | None = None,
     project_name: str | None = None,
     file_name: str | None = None,

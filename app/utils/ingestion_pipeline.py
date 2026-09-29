@@ -1,15 +1,18 @@
 import asyncio
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
-from datetime import datetime, timezone
 
+from langchain_text_splitters import (
+    MarkdownHeaderTextSplitter,
+    RecursiveCharacterTextSplitter,
+)
 from markitdown import MarkItDown
-from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownHeaderTextSplitter
 
 from app.config import settings
+from app.typing.schemas import ChunkData, SummarizedChunk
 from app.utils import mongodb
 from app.utils.mongodb import check_collection_exists
-from app.typing.schemas import ChunkData, SummarizedChunk
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +127,7 @@ async def ingestion_pipeline(
                 raise
             logger.warning(f"Embedding attempt {attempt + 1} failed: {e}, retrying...")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     docs_to_insert = []
     for i, (chunk, vector) in enumerate(zip(final_chunks, embedding_vectors)):
         doc = {

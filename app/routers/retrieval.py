@@ -1,11 +1,12 @@
 import json
 import logging
+
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
-from app.utils.retrieval_pipeline import retrieval_pipeline
+from app.middleware.auth import UserInfo, get_current_user
 from app.typing.schemas import QueryRequest
-from app.middleware.auth import get_current_user, UserInfo
+from app.utils.retrieval_pipeline import retrieval_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +34,8 @@ async def query_stream(request: QueryRequest, user: UserInfo = Depends(get_curre
                     yield f"data: {json.dumps({'type': 'sources', 'sources': data})}\n\n"
                 elif event_type == "done":
                     yield f"data: {json.dumps({'type': 'done'})}\n\n"
-        except Exception as e:
-            logger.error(f"Query stream failed: {e}", exc_info=True)
+        except Exception:
+            logger.exception("Query stream failed")
             yield f"data: {json.dumps({'type': 'error', 'error': 'Query failed. Please try again.'})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

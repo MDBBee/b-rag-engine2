@@ -1,10 +1,10 @@
 import logging
 
+from langchain_mongodb import MongoDBAtlasVectorSearch
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import MongoClient
 from pymongo.operations import SearchIndexModel
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_mongodb import MongoDBAtlasVectorSearch
 
 from app.config import settings
 

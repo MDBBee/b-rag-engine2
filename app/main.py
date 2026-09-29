@@ -6,8 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.routers import ingestion, retrieval, collections
-from app.utils.mongodb import init_mongodb, close_mongodb
+from app.routers import collections, ingestion, retrieval
+from app.utils.mongodb import close_mongodb, init_mongodb
 
 logging.basicConfig(
     level=logging.INFO,
