@@ -1,19 +1,23 @@
 # b-rag-engine2
 
-Production-ready FastAPI backend for a multimodal RAG (Retrieval-Augmented Generation) system with MongoDB Atlas vector storage, JWT authentication, and agentic retrieval workflows.
+Production-grade FastAPI backend for a multimodal Retrieval-Augmented Generation (RAG) system, featuring MongoDB Atlas vector storage, JWT authentication, and agentic retrieval workflows powered by LangGraph.
+
+---
 
 ## Overview
 
-This service provides document ingestion, vector storage, and intelligent query retrieval using LangChain and LangGraph. It's designed for multi-tenant applications with user isolation and secure authentication.
+This service provides enterprise-ready document ingestion, vector storage, and intelligent query retrieval. Built with a focus on security, scalability, and multi-tenant isolation, it serves as the backend for a comprehensive RAG application.
 
-### Key Features
+### Key Capabilities
 
-- **Document Ingestion**: Convert PDF, DOCX, PPTX, XLSX, HTML to markdown and chunk with hybrid strategy (header + recursive)
-- **Vector Storage**: MongoDB Atlas with vector search, user isolation via `user_id` filtering
-- **Agentic Retrieval**: LangGraph-based workflow with intent routing and streaming responses
-- **Authentication**: JWT Bearer token verification (shared secret with frontend)
-- **Multi-tenant**: Collection uniqueness per user, cascade delete support
-- **Production Ready**: Dockerized, CORS configured, rate limiting support
+- **Document Processing**: Converts PDF, DOCX, PPTX, XLSX, and HTML to markdown with hybrid chunking strategy (header + recursive)
+- **Vector Storage**: MongoDB Atlas with vector search, user isolation via `user_id` filtering, and collection-level access control
+- **Agentic Retrieval**: LangGraph-based workflow with intent routing, streaming responses, and intelligent query classification
+- **Authentication**: JWT Bearer token verification with shared secret for cross-domain auth
+- **Multi-Tenant Architecture**: Collection uniqueness per user, cascade delete support, and complete data isolation
+- **Production Ready**: Dockerized, CORS configured, rate limiting support, and comprehensive error handling
+
+---
 
 ## Architecture
 
@@ -22,16 +26,16 @@ This service provides document ingestion, vector storage, and intelligent query 
 │                         Frontend (Vercel)                        │
 │                    brag.bobbyugbebor.store                       │
 └─────────────────────────────────────────────────────────────────┘
-                              │
-                              │ Bearer Token + JSON
-                              ▼
+                               │
+                               │ Bearer Token + JSON
+                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                      Cloudflare (WAF + DDoS)                     │
 │                 api-brag.bobbyugbebor.store                      │
 └─────────────────────────────────────────────────────────────────┘
-                              │
-                              │ HTTPS (Cloudflare IPs only)
-                              ▼
+                               │
+                               │ HTTPS (Cloudflare IPs only)
+                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    AWS EC2 (eu-north-1)                          │
 │  ┌───────────────────────────────────────────────────────────┐  │
@@ -50,61 +54,69 @@ This service provides document ingestion, vector storage, and intelligent query 
 │  │  └─────────────────┘         └─────────────────────────┘  │  │
 │  └───────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
-                              │
-                              │ Vector Search
-                              ▼
+                               │
+                               │ Vector Search
+                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    MongoDB Atlas                                 │
 │              Collection: vectors (with embeddings)               │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## Tech Stack
+---
+
+## Technology Stack
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| **Framework** | FastAPI | Async API with automatic OpenAPI docs |
-| **Vector Store** | MongoDB Atlas | Vector search with user isolation |
-| **Embeddings** | OpenAI text-embedding-3-small | Via OpenRouter API |
-| **LLM** | OpenAI gpt-4o-mini | Via OpenRouter API |
+| **Framework** | FastAPI | Async API with automatic OpenAPI documentation |
+| **Vector Store** | MongoDB Atlas | Vector search with user isolation and pre-filtering |
+| **Embeddings** | OpenAI text-embedding-3-small | High-quality embeddings via OpenRouter API |
+| **LLM** | OpenAI gpt-4o-mini | Cost-effective language model via OpenRouter API |
 | **Orchestration** | LangChain + LangGraph | RAG pipeline and agentic workflows |
 | **Document Processing** | markitdown | Convert PDF/DOCX/PPTX/XLSX/HTML to markdown |
 | **Authentication** | python-jose | JWT verification (HS256) |
-| **Reverse Proxy** | Caddy | Auto SSL, reverse proxy to FastAPI |
-| **Containerization** | Docker | Multi-stage build, non-root user |
+| **Reverse Proxy** | Caddy | Auto SSL with Let's Encrypt, reverse proxy |
+| **Containerization** | Docker | Multi-stage build, non-root user, optimized image |
+
+---
 
 ## API Endpoints
 
 All endpoints except `/health` require `Authorization: Bearer <jwt>` header.
 
 ### Health Check
-```
+```http
 GET /health
 ```
-Returns: `{"status": "ok"}`
+**Response:** `{"status": "ok"}`
 
 ### Document Ingestion
-```
+```http
 POST /ingest
 Content-Type: multipart/form-data
 
 Parameters:
 - file: UploadFile (PDF, DOCX, PPTX, XLSX, HTML)
 - collection_name: string (optional, auto-generated from filename)
+```
 
-Response:
+**Response:**
+```json
 {
   "status": "ok",
   "chunk_count": 184,
   "document_type": "pdf",
   "no_of_pages": 5,
-  "chunks": [...],
-  "summarized_chunks": [...]
+  "chunks": [{"text": "...", "types": ["text"], "tables": [], "images": []}],
+  "summarized_chunks": [{"page_content": "...", "metadata": {"chunk_id": "0"}}]
 }
 ```
 
+**Error:** `409 Conflict` if collection already exists for the user.
+
 ### Query with Streaming
-```
+```http
 POST /query/stream
 Content-Type: application/json
 
@@ -112,8 +124,10 @@ Content-Type: application/json
   "query": "What is hydrothermal carbonization?",
   "collection_name": "thesis_masters"
 }
+```
 
-Response: Server-Sent Events (SSE)
+**Response:** Server-Sent Events (SSE)
+```
 data: {"type": "sources", "sources": [...]}
 data: {"type": "token", "content": "Hydrothermal"}
 data: {"type": "token", "content": " carbonization"}
@@ -121,10 +135,12 @@ data: {"type": "done"}
 ```
 
 ### List Collections
-```
+```http
 GET /collections
+```
 
-Response:
+**Response:**
+```json
 [
   {
     "collection_name": "thesis_masters",
@@ -135,10 +151,12 @@ Response:
 ```
 
 ### Get Collection Chunks
-```
+```http
 GET /collections/{name}/chunks
+```
 
-Response:
+**Response:**
+```json
 {
   "collection_name": "thesis_masters",
   "chunk_count": 184,
@@ -147,14 +165,18 @@ Response:
 ```
 
 ### Delete Collection
-```
+```http
 DELETE /collections/{name}
+```
 
-Response:
+**Response:**
+```json
 {
   "deleted_vectors": 184
 }
 ```
+
+---
 
 ## Local Development
 
@@ -187,7 +209,7 @@ cp .env.example .env
 uv run fastapi dev app/main.py
 ```
 
-Server runs on `http://localhost:8000` with hot reload.
+Server runs on `http://localhost:8000` with hot reload enabled.
 
 ### Testing
 
@@ -198,6 +220,8 @@ curl http://localhost:8000/health
 # Test with Swagger UI
 open http://localhost:8000/docs
 ```
+
+---
 
 ## Docker
 
@@ -230,11 +254,13 @@ docker build -t b-rag-view:1.0.0 --target production ../b-rag-view
 docker compose up --watch
 ```
 
-## Deployment
+---
+
+## Production Deployment
 
 ### AWS Infrastructure
 
-The production deployment uses:
+The production deployment utilizes:
 
 - **EC2 Instance**: t3.micro (Amazon Linux 2023)
 - **VPC**: Dedicated VPC with public subnet
@@ -284,6 +310,10 @@ docker run -d \
   $ECR_URL:latest
 ```
 
+For detailed deployment instructions, see [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md).
+
+---
+
 ## Configuration
 
 Environment variables (see `.env.example`):
@@ -302,6 +332,8 @@ Environment variables (see `.env.example`):
 | `CHUNK_SIZE` | Chunk size for document splitting | No |
 | `CHUNK_OVERLAP` | Chunk overlap for document splitting | No |
 | `TOP_K` | Number of chunks to retrieve | No |
+
+---
 
 ## Project Structure
 
@@ -338,6 +370,8 @@ b-rag-engine2/
 └── .env.example                # Environment template
 ```
 
+---
+
 ## Security Considerations
 
 - **Never commit `.env`** — contains API keys and secrets
@@ -347,18 +381,20 @@ b-rag-engine2/
 - **Use Cloudflare proxy** — hides real EC2 IP, provides WAF/DDoS protection
 - **Keep dependencies updated** — run `uv sync` regularly
 
+---
+
 ## Troubleshooting
 
 ### CORS Errors
 
-Check that:
+Verify that:
 1. `CORS_ORIGINS` in SSM includes your frontend domain
 2. Container was restarted after updating SSM parameter
-3. Verify with: `docker exec brag-api env | grep CORS`
+3. Check with: `docker exec brag-api env | grep CORS`
 
 ### Authentication Failures
 
-Check that:
+Verify that:
 1. `AUTH_SECRET` matches between frontend and backend
 2. JWT token is not expired
 3. Token is sent as `Authorization: Bearer <token>`
@@ -375,10 +411,22 @@ Common issues:
 - MongoDB connection failure
 - Invalid API keys
 
+---
+
+## Documentation
+
+- **[AGENT_RULES.md](./AGENT_RULES.md)** — Rules and conventions for AI agents
+- **[PROGRESS_TRACKER.md](./PROGRESS_TRACKER.md)** — Development progress and phase tracking
+- **[DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)** — Step-by-step deployment instructions
+
+---
+
 ## License
 
 Private project — not for distribution.
 
+---
+
 ## Author
 
-Bobby Ugbebor
+**Bobby Ugbebor**
