@@ -65,13 +65,14 @@ jobs:
       - name: Terraform Plan
         id: plan
         env:
+          TF_INPUT: "false"
           TF_VAR_api_domain: "placeholder.example.com"
           TF_VAR_your_ip: "0.0.0.0/0"
-        run: terraform plan -no-color -out=tfplan
+        run: terraform plan -no-color -lock-timeout=60s -out=tfplan
         continue-on-error: true
 
-      - name: Cleanup stale locks on failure
-        if: failure() && steps.plan.outcome == 'failure'
+      - name: Cleanup stale locks on failure or cancellation
+        if: failure() || cancelled()
         run: |
           if [ -f .terraform/terraform.tfstate.lock.info ]; then
             LOCK_ID=$(jq -r '.ID' .terraform/terraform.tfstate.lock.info)
