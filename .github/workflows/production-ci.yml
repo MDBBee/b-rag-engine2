@@ -65,6 +65,7 @@ jobs:
       - name: Terraform Plan
         id: plan
         env:
+          TF_INPUT: "false"
           TF_VAR_api_domain: "placeholder.example.com"
           TF_VAR_your_ip: "0.0.0.0/0"
         run: terraform plan -no-color -out=tfplan
