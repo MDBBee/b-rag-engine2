@@ -19,7 +19,7 @@ vectors = None
 sync_client: MongoClient | None = None
 sync_db = None
 
-# Shared LLM/embedding instances
+# Model instances (pre-initialized at startup)
 llm: ChatOpenAI | None = None
 embeddings: OpenAIEmbeddings | None = None
 vectorstore: MongoDBAtlasVectorSearch | None = None
@@ -39,16 +39,17 @@ async def init_mongodb():
         sync_client = MongoClient(settings.mongodb_uri)
         sync_db = sync_client[settings.mongodb_database]
 
+        embeddings = OpenAIEmbeddings(
+            model="text-embedding-3-small",
+            openai_api_key=settings.openrouter_api_key,
+            openai_api_base=settings.openrouter_base_url,
+        )
+
         llm = ChatOpenAI(
-            model=settings.llm_model,
+            model="openai/gpt-4o-mini",
             openai_api_key=settings.openrouter_api_key,
             openai_api_base=settings.openrouter_base_url,
             temperature=0,
-        )
-        embeddings = OpenAIEmbeddings(
-            model=settings.embedding_model,
-            openai_api_key=settings.openrouter_api_key,
-            openai_api_base=settings.openrouter_base_url,
         )
 
         vectorstore = MongoDBAtlasVectorSearch(
@@ -60,9 +61,8 @@ async def init_mongodb():
         )
 
         await ensure_indexes()
-        logger.info("MongoDB initialized")
     except Exception as e:
-        logger.error(f"MongoDB init failed: {e}")
+        logger.error("MongoDB init failed: %s", type(e).__name__)
         raise
 
 
@@ -93,9 +93,6 @@ async def ensure_indexes():
             type="vectorSearch",
         )
         await vectors.create_search_index(model=search_index_model)
-        logger.info("Created vector search index: %s", VECTOR_INDEX_NAME)
-    else:
-        logger.info("Vector search index already exists: %s", VECTOR_INDEX_NAME)
 
 
 async def close_mongodb():
@@ -113,7 +110,6 @@ async def close_mongodb():
     llm = None
     embeddings = None
     vectorstore = None
-    logger.info("MongoDB connection closed")
 
 
 async def check_collection_exists(user_id: str, collection_name: str) -> bool:

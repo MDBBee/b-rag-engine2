@@ -17,12 +17,15 @@ class Settings(BaseSettings):
     mongodb_database: str = "b-rag"
     chunk_size: int = 1000
     chunk_overlap: int = 200
+    text_splitter: str = "recursive"
     oversized_threshold: int = 2000
     top_k: int = 5
     cors_origins: str = "http://localhost:3000"
     auth_secret: str = ""
     max_ingest_file_size: int = 50 * 1024 * 1024
     max_processing_file_size: int = 100 * 1024 * 1024
+    rephrase_enabled: bool = True
+    max_rephrase_retries: int = 1
 
     @property
     def cors_origins_list(self) -> list[str]:

@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/collections",
     tags=["collections"],
-    dependencies=[Depends(get_current_user)],
 )
 
 

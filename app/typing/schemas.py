@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -26,14 +26,19 @@ class IngestResponse(BaseModel):
     detail: str | None = Field(default=None)
 
 
+class ChatMessageHistory(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1)
+
+
 class QueryRequest(BaseModel):
     query: str
     collection_name: str
     top_k: int | None = Field(default=None)
-    messages: list[dict] = Field(default_factory=list)
-    llm_model: str | None = Field(default=None)
+    messages: list[ChatMessageHistory] = Field(default_factory=list)
     project_name: str | None = Field(default=None)
     file_name: str | None = Field(default=None)
+    max_retries: int | None = Field(default=None, ge=0, le=3)
 
 
 class SourceChunk(BaseModel):

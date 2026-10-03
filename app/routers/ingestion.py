@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/ingest",
     tags=["ingestion"],
-    dependencies=[Depends(get_current_user)],
 )
 
 MAX_COLLECTION_NAME_LENGTH = 40
@@ -37,9 +36,9 @@ def filename_to_collection_name(filename: str) -> str:
 async def ingest(
     file: UploadFile = File(...),
     collection_name: str | None = Form(None),
-    embedding_model: str | None = Form(None),
     chunk_size: int | None = Form(None),
     chunk_overlap: int | None = Form(None),
+    text_splitter: str | None = Form(None),
     user: UserInfo = Depends(get_current_user),
 ):
     tmp_path = await save_temp_with_limit(file, settings.max_ingest_file_size)
@@ -50,9 +49,9 @@ async def ingest(
     try:
         chunk_count, document_type, no_of_pages, chunks, summarized_chunks = await ingestion_pipeline(
             tmp_path, file.filename, collection_name, user.id,
-            embedding_model=embedding_model,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
+            text_splitter=text_splitter,
         )
         return IngestResponse(
             status="ok",

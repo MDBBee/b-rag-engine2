@@ -1,3 +1,4 @@
+from dotenv import load_dotenv
 import logging
 from contextlib import asynccontextmanager
 
@@ -8,7 +9,9 @@ from fastapi.responses import JSONResponse
 from app.config import settings
 from app.routers import collections, file_processing, ingestion, retrieval
 from app.utils.mongodb import close_mongodb, init_mongodb
+from app.utils.retrieval_pipeline import init_graph
 
+load_dotenv()
 logging.basicConfig(
     level=logging.WARNING,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
@@ -16,10 +19,12 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if not settings.auth_secret:
+        raise RuntimeError("AUTH_SECRET is required but not configured")
     await init_mongodb()
+    init_graph()
     yield
     await close_mongodb()
 

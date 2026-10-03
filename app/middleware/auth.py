@@ -27,12 +27,6 @@ def get_current_user(
         )
 
     token = authorization.split(" ", 1)[1]
-    if not settings.auth_secret:
-        logger.error("Auth failed: auth_secret not configured")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Authentication not configured",
-        )
 
     try:
         payload = jwt.decode(token, settings.auth_secret, algorithms=["HS256"])
@@ -43,7 +37,7 @@ def get_current_user(
             detail="Token expired",
         )
     except JWTError as e:
-        logger.warning(f"Auth failed: invalid token - {e}")
+        logger.warning("Auth failed: invalid token - %s", e)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",

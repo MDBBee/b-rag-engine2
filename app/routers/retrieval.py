@@ -13,8 +13,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/query",
     tags=["retrieval"],
-    dependencies=[Depends(get_current_user)],
 )
+
+NODE_EVENT_MAP = {
+    "router": ("searching", "Analyzing query..."),
+    "retrieve": ("searching", "Searching documents..."),
+    "rephrase_query": ("rephrasing", "Rephrasing query..."),
+    "generate": ("generating", "Generating answer..."),
+}
 
 
 @router.post("/stream")
@@ -26,11 +32,16 @@ async def query_stream(request: QueryRequest, user: UserInfo = Depends(get_curre
                 collection_name=request.collection_name,
                 user_id=user.id,
                 messages=request.messages,
-                llm_model=request.llm_model,
                 project_name=request.project_name,
                 file_name=request.file_name,
+                top_k=request.top_k,
+                max_retries=request.max_retries,
             ):
-                if event_type == "token":
+                if event_type == "node_start":
+                    fe_type, message = NODE_EVENT_MAP.get(data, (None, None))
+                    if fe_type:
+                        yield f"data: {json.dumps({'type': fe_type, 'message': message})}\n\n"
+                elif event_type == "token":
                     yield f"data: {json.dumps({'type': 'token', 'content': data})}\n\n"
                 elif event_type == "sources":
                     yield f"data: {json.dumps({'type': 'sources', 'sources': data})}\n\n"

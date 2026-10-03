@@ -1,7 +1,6 @@
 import logging
 import re
 from io import BytesIO
-from pathlib import Path
 
 import fitz
 import mammoth
@@ -98,42 +97,6 @@ def docx_to_pdf_via_mammoth(docx_path: str) -> tuple[bytes, int]:
 
     page_count = count_pdf_pages(pdf_bytes)
     return pdf_bytes, page_count
-
-
-def merge_pdfs(file_paths: list[tuple[str, str]]) -> tuple[bytes, int, list[dict]]:
-    """Merge multiple files into a single PDF. Each entry is (file_path, original_filename).
-    Images are converted to PDF first. Returns (pdf_bytes, total_pages, sources_metadata)."""
-    merger = fitz.open()
-    sources = []
-
-    for file_path, original_filename in file_paths:
-        ext = Path(file_path).suffix.lower()
-
-        if ext in IMAGE_EXTENSIONS:
-            pdf_bytes, pages = image_to_pdf(file_path)
-            temp_doc = fitz.open("pdf", pdf_bytes)
-            merger.insert_pdf(temp_doc)
-            temp_doc.close()
-            sources.append({"filename": original_filename, "pages": pages})
-
-        elif ext in PDF_EXTENSIONS:
-            doc = fitz.open(file_path)
-            pages = len(doc)
-            merger.insert_pdf(doc)
-            doc.close()
-            sources.append({"filename": original_filename, "pages": pages})
-
-        else:
-            raise ValueError(f"Unsupported file type for merge: {ext}")
-
-    output = BytesIO()
-    merger.save(output)
-    merger.close()
-    output.seek(0)
-    pdf_bytes = output.read()
-
-    total_pages = count_pdf_pages(pdf_bytes)
-    return pdf_bytes, total_pages, sources
 
 
 def count_pdf_pages(pdf_bytes: bytes) -> int:
