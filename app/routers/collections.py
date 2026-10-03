@@ -16,10 +16,14 @@ from app.utils.mongodb import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(
+    prefix="/collections",
+    tags=["collections"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
-@router.get("/collections", response_model=list[CollectionInfo])
+@router.get("", response_model=list[CollectionInfo])
 async def get_collections(user: UserInfo = Depends(get_current_user)):
     """List all collections for a user."""
     try:
@@ -30,7 +34,7 @@ async def get_collections(user: UserInfo = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail="Failed to list collections")
 
 
-@router.get("/collections/{collection_name}/chunks", response_model=CollectionChunksResponse)
+@router.get("/{collection_name}/chunks", response_model=CollectionChunksResponse)
 async def get_chunks(collection_name: str, user: UserInfo = Depends(get_current_user)):
     """Fetch all chunks for a collection (for visualization page)."""
     try:
@@ -45,7 +49,7 @@ async def get_chunks(collection_name: str, user: UserInfo = Depends(get_current_
         raise HTTPException(status_code=500, detail="Failed to fetch chunks")
 
 
-@router.delete("/collections/{collection_name}", response_model=CascadeDeleteResponse)
+@router.delete("/{collection_name}", response_model=CascadeDeleteResponse)
 async def delete_collection(collection_name: str, user: UserInfo = Depends(get_current_user)):
     """Delete a collection and all associated vectors."""
     try:

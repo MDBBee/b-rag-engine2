@@ -10,13 +10,15 @@ from app.utils.retrieval_pipeline import retrieval_pipeline
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(
+    prefix="/query",
+    tags=["retrieval"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
-@router.post("/query/stream")
+@router.post("/stream")
 async def query_stream(request: QueryRequest, user: UserInfo = Depends(get_current_user)):
-    print("QUERY:", request)
-
     async def event_stream():
         try:
             async for event_type, data in retrieval_pipeline(

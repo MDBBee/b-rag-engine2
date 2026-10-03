@@ -1,20 +1,24 @@
 import logging
 import re
-import tempfile
 import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
+from app.config import settings
 from app.middleware.auth import UserInfo, get_current_user
 from app.typing.schemas import IngestResponse
+from app.utils.file_validation import save_temp_with_limit
 from app.utils.ingestion_pipeline import ingestion_pipeline
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(
+    prefix="/ingest",
+    tags=["ingestion"],
+    dependencies=[Depends(get_current_user)],
+)
 
-MAX_FILE_SIZE = 1500 * 1024  # 1,500 KB
 MAX_COLLECTION_NAME_LENGTH = 40
 
 
@@ -29,7 +33,7 @@ def filename_to_collection_name(filename: str) -> str:
     return name[:MAX_COLLECTION_NAME_LENGTH]
 
 
-@router.post("/ingest", response_model=IngestResponse)
+@router.post("", response_model=IngestResponse)
 async def ingest(
     file: UploadFile = File(...),
     collection_name: str | None = Form(None),
@@ -38,20 +42,10 @@ async def ingest(
     chunk_overlap: int | None = Form(None),
     user: UserInfo = Depends(get_current_user),
 ):
-    content = await file.read()
-    if len(content) > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=413,
-            detail="Sorry! At the moment we are running a tiny fraction of a core with quite limited memory and storage, we can only process feeds less than 1,500kb."
-        )
+    tmp_path = await save_temp_with_limit(file, settings.max_ingest_file_size)
 
     if not collection_name:
         collection_name = filename_to_collection_name(file.filename)
-
-    suffix = Path(file.filename).suffix
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(content)
-        tmp_path = tmp.name
 
     try:
         chunk_count, document_type, no_of_pages, chunks, summarized_chunks = await ingestion_pipeline(
@@ -69,7 +63,7 @@ async def ingest(
             summarized_chunks=summarized_chunks,
         )
     except ValueError as e:
-        logger.warning(f"Collection uniqueness violation: {e}")
+        logger.warning("Collection uniqueness violation: %s", e)
         raise HTTPException(status_code=409, detail=str(e))
     except TimeoutError:
         logger.error("Ingestion timed out")

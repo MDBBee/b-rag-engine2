@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     top_k: int = 5
     cors_origins: str = "http://localhost:3000"
     auth_secret: str = ""
+    max_ingest_file_size: int = 50 * 1024 * 1024
+    max_processing_file_size: int = 100 * 1024 * 1024
 
     @property
     def cors_origins_list(self) -> list[str]:
