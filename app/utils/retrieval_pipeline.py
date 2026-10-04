@@ -11,10 +11,9 @@ from app.config import settings
 from app.typing.schemas import ChatMessageHistory
 from app.utils import mongodb
 
-# Module-level cache for compiled graph and structured LLM
+# Module-level cache for compiled graph
 compiled_graph = None
 cached_rephrase_enabled = None
-router_structured_llm = None
 
 
 def init_graph():
@@ -30,16 +29,6 @@ def get_compiled_graph():
     if compiled_graph is None or cached_rephrase_enabled != settings.rephrase_enabled:
         init_graph()
     return compiled_graph
-
-
-def get_router_structured_llm():
-    """Get cached structured LLM for router."""
-    global router_structured_llm
-    if router_structured_llm is None:
-        router_structured_llm = mongodb.llm.with_structured_output(
-            RouteDecision, method="function_calling"
-        )
-    return router_structured_llm
 
 
 METADATA_PATTERNS = {
@@ -96,11 +85,13 @@ async def route_node(state: RAGState) -> dict:
     """Classify query intent: needs document retrieval or direct answer."""
     messages = state["messages"]
     query = messages[-1].content if messages else ""
-    
-    structured_llm = get_router_structured_llm()
+    llm = state["llm"]
 
-    result = await structured_llm.ainvoke([
-        SystemMessage(content="""Determine if the user's question should be answered from their uploaded documents or answered directly.
+    try:
+        structured_llm = llm.with_structured_output(RouteDecision)
+
+        result = await structured_llm.ainvoke([
+            SystemMessage(content="""Determine if the user's question should be answered from their uploaded documents or answered directly.
 
 TRUE (retrieve from documents) — ANY question that COULD be answered by the uploaded documents:
 - Questions about document content, topics, concepts, or information
@@ -119,10 +110,20 @@ FALSE (answer directly, no retrieval) — ONLY these specific cases:
 - General knowledge COMPLETELY unrelated to documents: "what time is it?", "what's the weather?"
 
 IMPORTANT: If the question could possibly relate to the uploaded documents in ANY way, choose TRUE. When in doubt, ALWAYS choose TRUE."""),
-        HumanMessage(content=query),
-    ])
+            HumanMessage(content=query),
+        ])
 
-    return {"route": "retrieve" if result.needs_retrieval else "direct"}
+        if result is None:
+            model_name = getattr(llm, 'model', 'unknown')
+            raise ValueError(f"Model '{model_name}' does not support tool/function calling")
+
+        return {"route": "retrieve" if result.needs_retrieval else "direct"}
+    
+    except Exception as e:
+        model_name = getattr(llm, 'model', 'unknown')
+        raise ValueError(
+            f"Model selected: {model_name}, does not support tool and/or function calling, please pick another!"
+        ) from e
 
 
 async def retrieve_node(state: RAGState) -> dict:
@@ -269,6 +270,8 @@ async def retrieval_pipeline(
     file_name: str | None = None,
     top_k: int | None = None,
     max_retries: int | None = None,
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
 ) -> AsyncGenerator[tuple[str, str | list[dict]], None]:
     """Stream RAG response with conversation history from frontend."""
     
@@ -288,6 +291,17 @@ async def retrieval_pipeline(
     
     all_messages = [m.model_dump() for m in messages] + [{"role": "user", "content": query}]
 
+    resolved_provider = llm_provider or "openrouter"
+
+    if resolved_provider == "ollama":
+        if not llm_model:
+            yield ("error", "Ollama provider selected but no model specified. Please select a model in project settings.")
+            yield ("done", None)
+            return
+        llm = mongodb.get_llm(llm_model)
+    else:
+        llm = mongodb.llm
+
     rag_pipeline = get_compiled_graph()
 
     input_data = {
@@ -299,51 +313,58 @@ async def retrieval_pipeline(
         "user_id": user_id,
         "project_name": project_name or "",
         "file_name": file_name or "",
-        "llm": mongodb.llm,
+        "llm": llm,
         "top_k": top_k or settings.top_k,
     }
 
     sources_yielded = False
     node_names = {"router", "retrieve", "rephrase_query", "generate"}
 
-    async for event in rag_pipeline.astream_events(
-        input_data,
-        version="v2",
-    ):
-        event_type = event["event"]
-        metadata = event.get("metadata", {})
-        node_name = metadata.get("langgraph_node")
-        
-        if event_type == "on_chain_start" and node_name in node_names:
-            yield ("node_start", node_name)
+    try:
+        async for event in rag_pipeline.astream_events(
+            input_data,
+            version="v2",
+        ):
+            event_type = event["event"]
+            metadata = event.get("metadata", {})
+            node_name = metadata.get("langgraph_node")
+            
+            if event_type == "on_chain_start" and node_name in node_names:
+                print(f"NODE----START::::===>>:::, {node_name}")
+                yield ("node_start", node_name)
 
-        elif event_type == "on_chat_model_stream":
-            if node_name == "generate":
-                chunk = event["data"].get("chunk")
-                if chunk and chunk.content:
-                    if not sources_yielded:
-                        yield ("sources", [])
-                        sources_yielded = True
-                    yield ("token", chunk.content)
+            elif event_type == "on_chat_model_stream":
+                if node_name == "generate":
+                    chunk = event["data"].get("chunk")
+                    if chunk and chunk.content:
+                        if not sources_yielded:
+                            yield ("sources", [])
+                            sources_yielded = True
+                        yield ("token", chunk.content)
 
-        elif event_type == "on_chain_end":
-            if node_name == "retrieve":
-                output = event.get("data", {}).get("output", {})
-                
-                # Defensive check: output might not be a dict
-                if isinstance(output, dict):
-                    retrieved_docs = output.get("retrieved_docs", [])
-                    if retrieved_docs and not sources_yielded:
-                        sources = [
-                            {
-                                "chunk_id": str(doc.metadata.get("chunk_index", i)),
-                                "content_preview": doc.page_content[:300],
-                                "source": doc.metadata.get("source"),
-                            }
-                            for i, doc in enumerate(retrieved_docs)
-                        ]
-                        yield ("sources", sources)
-                        sources_yielded = True
+            elif event_type == "on_chain_end":
+                if node_name == "retrieve":
+                    output = event.get("data", {}).get("output", {})
+                    print(f"NODE----RETRIEVE::::===>>:::, {output}")
+                    
+                    # Defensive check: output might not be a dict
+                    if isinstance(output, dict):
+                        retrieved_docs = output.get("retrieved_docs", [])
+                        if retrieved_docs and not sources_yielded:
+                            sources = [
+                                {
+                                    "chunk_id": str(doc.metadata.get("chunk_index", i)),
+                                    "content_preview": doc.page_content[:300],
+                                    "source": doc.metadata.get("source"),
+                                }
+                                for i, doc in enumerate(retrieved_docs)
+                            ]
+                            yield ("sources", sources)
+                            sources_yielded = True
+    except ValueError as e:
+        yield ("error", str(e))
+        yield ("done", None)
+        return
 
     if not sources_yielded:
         yield ("sources", [])

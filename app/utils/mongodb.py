@@ -1,6 +1,7 @@
 import logging
 
 from langchain_mongodb import MongoDBAtlasVectorSearch
+from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import MongoClient
@@ -27,6 +28,24 @@ vectorstore: MongoDBAtlasVectorSearch | None = None
 VECTORS_COLLECTION = "vectors"
 VECTOR_INDEX_NAME = "vector_index"
 
+_llm_cache: dict[str, ChatOllama] = {}
+
+
+def get_llm(model: str) -> ChatOllama:
+    """Get or create a cached Ollama LLM instance."""
+    if not model:
+        raise ValueError("Ollama provider requires a specific model name.")
+    cache_key = f"ollama:{model}"
+
+    if cache_key not in _llm_cache:
+        _llm_cache[cache_key] = ChatOllama(
+            model=model,
+            base_url=settings.ollama_base_url,
+            temperature=0,
+        )
+
+    return _llm_cache[cache_key]
+
 
 async def init_mongodb():
     """Initialize MongoDB clients, LLM/embeddings, and vectorstore."""
@@ -46,7 +65,7 @@ async def init_mongodb():
         )
 
         llm = ChatOpenAI(
-            model="openai/gpt-4o-mini",
+            model=settings.llm_model,
             openai_api_key=settings.openrouter_api_key,
             openai_api_base=settings.openrouter_base_url,
             temperature=0,

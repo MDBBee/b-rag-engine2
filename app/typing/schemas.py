@@ -34,6 +34,8 @@ class ChatMessageHistory(BaseModel):
 class QueryRequest(BaseModel):
     query: str
     collection_name: str
+    llm_provider: str | None = Field(default=None)
+    llm_model: str | None = Field(default=None)
     top_k: int | None = Field(default=None)
     messages: list[ChatMessageHistory] = Field(default_factory=list)
     project_name: str | None = Field(default=None)

@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     max_processing_file_size: int = 100 * 1024 * 1024
     rephrase_enabled: bool = True
     max_rephrase_retries: int = 1
+    ollama_base_url: str = "http://localhost:11434"
 
     @property
     def cors_origins_list(self) -> list[str]:
