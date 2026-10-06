@@ -59,6 +59,7 @@ Thumbs.db
 # Documentation (internal)
 *.md
 !README.md
+
 AGENT_RULES.md
 PROGRESS_TRACKER.md
 DEPLOYMENT_GUIDE.md
