@@ -9,7 +9,7 @@ services:
       - b-rag-network
 
   backend:
-    image: b-rag-engine2
+    image: bobbyugbebor/b-rag-engine2:1.0.0
     env_file:
       - ./b-rag-engine2/.env
     ports:
