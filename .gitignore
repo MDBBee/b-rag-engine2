@@ -59,11 +59,15 @@ Thumbs.db
 # Documentation (internal)
 *.md
 !README.md
-!AGENT_RULES.md
-!PROGRESS_TRACKER.md
-!DEPLOYMENT_GUIDE.md
+AGENT_RULES.md
+PROGRESS_TRACKER.md
+DEPLOYMENT_GUIDE.md
 *.txt
 
 # Terraform (sensitive)
 terraform/terraform.tfvars
 terraform/.terraform/
+terraform/user-data.sh 
+.dockerignore 
+terraform/ssm.tf 
+terraform/variables.tf 

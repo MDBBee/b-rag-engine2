@@ -25,7 +25,6 @@ def init_graph():
 
 def get_compiled_graph():
     """Get cached graph, rebuild only if settings changed."""
-    global compiled_graph, cached_rephrase_enabled
     if compiled_graph is None or cached_rephrase_enabled != settings.rephrase_enabled:
         init_graph()
     return compiled_graph

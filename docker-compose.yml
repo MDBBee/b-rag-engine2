@@ -8,7 +8,7 @@ services:
     env_file:
       - .env
     environment:
-      - CORS_ORIGINS=http://localhost:3000
+      - CORS_ORIGINS=http://localhost:3000,http://frontend
     develop:
       watch:
         - path: .
