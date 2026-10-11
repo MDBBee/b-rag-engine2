@@ -3,7 +3,7 @@ from fastapi import HTTPException
 from jose import jwt
 
 from app.config import settings
-from app.middleware.auth import get_current_user, require_admin, UserInfo
+from app.middleware.auth import UserInfo, get_current_user, require_admin
 
 
 def test_get_current_user_valid_token(monkeypatch):

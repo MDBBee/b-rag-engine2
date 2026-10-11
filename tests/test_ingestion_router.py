@@ -1,10 +1,6 @@
-from unittest.mock import AsyncMock, patch
-
-import pytest
-from fastapi import HTTPException
+from unittest.mock import patch
 
 from app.main import app
-from app.middleware.auth import get_current_user
 
 
 def test_ingest_success(client_with_user, mock_user):
