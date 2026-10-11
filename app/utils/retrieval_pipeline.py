@@ -340,24 +340,23 @@ async def retrieval_pipeline(
                             sources_yielded = True
                         yield ("token", chunk.content)
 
-            elif event_type == "on_chain_end":
-                if node_name == "retrieve":
-                    output = event.get("data", {}).get("output", {})
-                    
-                    # Defensive check: output might not be a dict
-                    if isinstance(output, dict):
-                        retrieved_docs = output.get("retrieved_docs", [])
-                        if retrieved_docs and not sources_yielded:
-                            sources = [
-                                {
-                                    "chunk_id": str(doc.metadata.get("chunk_index", i)),
-                                    "content_preview": doc.page_content[:300],
-                                    "source": doc.metadata.get("source"),
-                                }
-                                for i, doc in enumerate(retrieved_docs)
-                            ]
-                            yield ("sources", sources)
-                            sources_yielded = True
+            elif event_type == "on_chain_end" and node_name == "retrieve":
+                output = event.get("data", {}).get("output", {})
+
+                # Defensive check: output might not be a dict
+                if isinstance(output, dict):
+                    retrieved_docs = output.get("retrieved_docs", [])
+                    if retrieved_docs and not sources_yielded:
+                        sources = [
+                            {
+                                "chunk_id": str(doc.metadata.get("chunk_index", i)),
+                                "content_preview": doc.page_content[:300],
+                                "source": doc.metadata.get("source"),
+                            }
+                            for i, doc in enumerate(retrieved_docs)
+                        ]
+                        yield ("sources", sources)
+                        sources_yielded = True
     except ValueError as e:
         yield ("error", str(e))
         yield ("done", None)
