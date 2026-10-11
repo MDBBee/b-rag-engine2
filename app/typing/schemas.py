@@ -56,6 +56,8 @@ class QueryResponse(BaseModel):
 
 class CollectionInfo(BaseModel):
     collection_name: str
+    name: str | None = None
+    file_name: str | None = None
     chunk_count: int
     created_at: datetime
 

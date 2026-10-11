@@ -2,8 +2,8 @@ import logging
 import re
 from io import BytesIO
 
-import fitz
 import mammoth
+import pymupdf
 from docx import Document as DocxDocument
 from PIL import Image
 from reportlab.lib.colors import HexColor, black, grey
@@ -101,7 +101,7 @@ def docx_to_pdf_via_mammoth(docx_path: str) -> tuple[bytes, int]:
 
 def count_pdf_pages(pdf_bytes: bytes) -> int:
     """Count pages in a PDF from bytes."""
-    doc = fitz.open("pdf", pdf_bytes)
+    doc = pymupdf.open("pdf", pdf_bytes)
     count = len(doc)
     doc.close()
     return count

@@ -2,7 +2,7 @@ import logging
 from io import BytesIO
 from pathlib import Path
 
-import fitz
+import pymupdf
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response
 
@@ -76,9 +76,9 @@ async def process_files(files: list[UploadFile] = File(...)):
             pdf_bytes = pdf_parts[0]
             headers = {"X-Pages": str(count_pdf_pages(pdf_bytes))}
         else:
-            merger = fitz.open()
+            merger = pymupdf.open()
             for pdf_bytes in pdf_parts:
-                doc = fitz.open("pdf", pdf_bytes)
+                doc = pymupdf.open("pdf", pdf_bytes)
                 merger.insert_pdf(doc)
                 doc.close()
             output = BytesIO()

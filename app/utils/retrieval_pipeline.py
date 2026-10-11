@@ -329,7 +329,6 @@ async def retrieval_pipeline(
             node_name = metadata.get("langgraph_node")
             
             if event_type == "on_chain_start" and node_name in node_names:
-                print(f"NODE----START::::===>>:::, {node_name}")
                 yield ("node_start", node_name)
 
             elif event_type == "on_chat_model_stream":
@@ -344,7 +343,6 @@ async def retrieval_pipeline(
             elif event_type == "on_chain_end":
                 if node_name == "retrieve":
                     output = event.get("data", {}).get("output", {})
-                    print(f"NODE----RETRIEVE::::===>>:::, {output}")
                     
                     # Defensive check: output might not be a dict
                     if isinstance(output, dict):

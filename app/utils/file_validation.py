@@ -75,6 +75,9 @@ async def save_temp_with_limit(file: UploadFile, max_size: int) -> str:
         validate_magic_number(tmp.name, ext)
         return tmp.name
 
+    except HTTPException:
+        Path(tmp.name).unlink(missing_ok=True)
+        raise
     except Exception:
         Path(tmp.name).unlink(missing_ok=True)
         logger.exception("Failed to save temp file: %s", filename)
