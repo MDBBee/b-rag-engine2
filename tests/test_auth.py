@@ -45,7 +45,8 @@ def test_get_current_user_invalid_token(monkeypatch):
     assert exc_info.value.status_code == 401
 
 
-def test_get_current_user_missing_sub():
+def test_get_current_user_missing_sub(monkeypatch):
+    monkeypatch.setattr(settings, "auth_secret", "test-secret")
     token = jwt.encode({"email": "test@example.com"}, "test-secret", algorithm="HS256")
     with pytest.raises(HTTPException) as exc_info:
         get_current_user(authorization=f"Bearer {token}")

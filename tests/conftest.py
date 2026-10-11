@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.middleware.auth import UserInfo
+from app.middleware.auth import UserInfo, get_current_user
 
 
 @pytest.fixture
@@ -20,9 +20,9 @@ def admin_user():
 @pytest.fixture
 def client(mock_user):
     """Test client with auth bypassed."""
-    app.dependency_overrides[app.dependency_overrides.get("get_current_user", lambda: None)] = lambda: mock_user
-    with TestClient(app) as c:
-        yield c
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    c = TestClient(app)
+    yield c
     app.dependency_overrides.clear()
 
 
@@ -30,7 +30,6 @@ def client(mock_user):
 def client_with_user():
     """Factory fixture to create client with specific user."""
     def _create_client(user):
-        from app.middleware.auth import get_current_user
         app.dependency_overrides[get_current_user] = lambda: user
         client = TestClient(app)
         return client
