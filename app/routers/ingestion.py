@@ -36,6 +36,7 @@ def filename_to_collection_name(filename: str) -> str:
 async def ingest(
     file: UploadFile = File(...),
     collection_name: str | None = Form(None),
+    project_name: str | None = Form(None),
     chunk_size: int | None = Form(None),
     chunk_overlap: int | None = Form(None),
     text_splitter: str | None = Form(None),
@@ -49,6 +50,7 @@ async def ingest(
     try:
         chunk_count, document_type, no_of_pages, chunks, summarized_chunks = await ingestion_pipeline(
             tmp_path, file.filename, collection_name, user.id,
+            project_name=project_name,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
             text_splitter=text_splitter,
@@ -67,6 +69,8 @@ async def ingest(
     except TimeoutError:
         logger.error("Ingestion timed out")
         raise HTTPException(status_code=504, detail="Ingestion timed out. Please try again.")
+    except HTTPException:
+        raise
     except Exception:
         logger.exception("Ingestion failed")
         raise HTTPException(status_code=500, detail="Ingestion failed. Please try again.")

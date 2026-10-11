@@ -63,6 +63,7 @@ Thumbs.db
 AGENT_RULES.md
 PROGRESS_TRACKER.md
 DEPLOYMENT_GUIDE.md
+TODO.md
 *.txt
 
 # Terraform (sensitive)

@@ -25,7 +25,6 @@ NODE_EVENT_MAP = {
 
 @router.post("/stream")
 async def query_stream(request: QueryRequest, user: UserInfo = Depends(get_current_user)):
-    print(f"REQUEST:::===::: {request}")
     async def event_stream():
         try:
             async for event_type, data in retrieval_pipeline(
