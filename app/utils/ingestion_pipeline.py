@@ -45,6 +45,49 @@ def get_page_count(file_path: str) -> int:
         return 0
 
 
+async def extract_text_by_page(file_path: str) -> list[dict]:
+    """Extract text per page for PDFs/DOCX/PPTX. Returns list of {text, page_number}.
+    
+    For PDFs: Extract directly with pymupdf
+    For DOCX/PPTX: Convert to PDF first, then extract
+    For TXT/HTML: Return full content with page_number=None
+    """
+    ext = Path(file_path).suffix.lower()
+    
+    if ext == ".pdf":
+        doc = pymupdf.open(file_path)
+        page_texts = []
+        for page_num, page in enumerate(doc, 1):
+            text = page.get_text()
+            if text.strip():
+                page_texts.append({"text": text, "page_number": page_num})
+        doc.close()
+        return page_texts
+    
+    elif ext in {".docx"}:
+        from app.utils.conversion_utils import docx_to_pdf
+        
+        try:
+            pdf_bytes, _ = docx_to_pdf(file_path)
+        except Exception:
+            from app.utils.conversion_utils import docx_to_pdf_via_mammoth
+            pdf_bytes, _ = docx_to_pdf_via_mammoth(file_path)
+        
+        doc = pymupdf.open("pdf", pdf_bytes)
+        page_texts = []
+        for page_num, page in enumerate(doc, 1):
+            text = page.get_text()
+            if text.strip():
+                page_texts.append({"text": text, "page_number": page_num})
+        doc.close()
+        return page_texts
+    
+    else:
+        md = MarkItDown()
+        result = await asyncio.to_thread(md.convert, file_path)
+        return [{"text": result.text_content, "page_number": None}]
+
+
 async def ingestion_pipeline(
     file_path: str,
     filename: str,
@@ -64,53 +107,60 @@ async def ingestion_pipeline(
         raise ValueError(f"Collection '{collection_name}' already exists for user '{user_id}'")
 
     document_type = detect_document_type(file_path)
-    no_of_pages = get_page_count(file_path)
-
-    md = MarkItDown()
-    result = await asyncio.to_thread(md.convert, file_path)
-    markdown_text = result.text_content
+    
+    page_texts = await extract_text_by_page(file_path)
+    no_of_pages = len([p for p in page_texts if p["page_number"] is not None])
 
     resolved_chunk_size = chunk_size if chunk_size is not None else settings.chunk_size
     resolved_chunk_overlap = chunk_overlap if chunk_overlap is not None else settings.chunk_overlap
     resolved_splitter = text_splitter or settings.text_splitter
 
-    if resolved_splitter == "markdown_header":
-        header_splitter = MarkdownHeaderTextSplitter(
-            headers_to_split_on=[("#", "H1"), ("##", "H2"), ("###", "H3")]
-        )
-        header_chunks = header_splitter.split_text(markdown_text)
-
-        recursive_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=resolved_chunk_size,
-            chunk_overlap=resolved_chunk_overlap,
-            length_function=len,
-            separators=["\n\n", "\n", " ", ""],
-        )
-
-        final_chunks = []
-        oversized_count = 0
-        for chunk in header_chunks:
-            if len(chunk.page_content) > settings.oversized_threshold:
-                oversized_count += 1
-                sub_chunks = recursive_splitter.split_documents([chunk])
-                final_chunks.extend(sub_chunks)
-            else:
-                final_chunks.append(chunk)
-
-    else:
-        splitter = get_splitter(resolved_splitter, resolved_chunk_size, resolved_chunk_overlap)
-        split_result = splitter.split_text(markdown_text)
+    final_chunks = []
+    
+    for page_data in page_texts:
+        page_text = page_data["text"]
+        page_number = page_data["page_number"]
         
-        if not split_result:
-            logger.warning("Text splitter produced zero chunks for: %s", filename)
-            raise HTTPException(status_code=400, detail="Document produced no content after splitting")
-        
-        if hasattr(split_result[0], 'page_content'):
-            final_chunks = split_result
+        if resolved_splitter == "markdown_header":
+            header_splitter = MarkdownHeaderTextSplitter(
+                headers_to_split_on=[("#", "H1"), ("##", "H2"), ("###", "H3")]
+            )
+            header_chunks = header_splitter.split_text(page_text)
+
+            recursive_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=resolved_chunk_size,
+                chunk_overlap=resolved_chunk_overlap,
+                length_function=len,
+                separators=["\n\n", "\n", " ", ""],
+            )
+
+            page_chunks = []
+            for chunk in header_chunks:
+                if len(chunk.page_content) > settings.oversized_threshold:
+                    sub_chunks = recursive_splitter.split_documents([chunk])
+                    page_chunks.extend(sub_chunks)
+                else:
+                    page_chunks.append(chunk)
+
         else:
-            from langchain_core.documents import Document
-            final_chunks = [Document(page_content=text) for text in split_result]
+            splitter = get_splitter(resolved_splitter, resolved_chunk_size, resolved_chunk_overlap)
+            split_result = splitter.split_text(page_text)
+            
+            if hasattr(split_result[0], 'page_content'):
+                page_chunks = split_result
+            else:
+                from langchain_core.documents import Document
+                page_chunks = [Document(page_content=text) for text in split_result]
         
+        for chunk in page_chunks:
+            chunk.metadata["page_number"] = page_number
+        
+        final_chunks.extend(page_chunks)
+    
+    if not final_chunks:
+        logger.warning("Text splitter produced zero chunks for: %s", filename)
+        raise HTTPException(status_code=400, detail="Document produced no content after splitting")
+    
     for i, chunk in enumerate(final_chunks):
         chunk.metadata.update({
             "source": filename,
