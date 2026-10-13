@@ -88,8 +88,15 @@ async def test_ingestion_pipeline_pdf_detection():
         mock_mongodb.embeddings.embed_documents.return_value = [[0.1, 0.2]]
         mock_mongodb.vectors.insert_many = AsyncMock()
         
+        mock_pages = []
+        for i in range(5):
+            mock_page = MagicMock()
+            mock_page.get_text.return_value = f"Page {i+1} content"
+            mock_pages.append(mock_page)
+        
         mock_doc = MagicMock()
         mock_doc.__len__ = MagicMock(return_value=5)
+        mock_doc.__iter__ = MagicMock(return_value=iter(mock_pages))
         mock_pymupdf.open.return_value = mock_doc
         
         result = await ingestion_pipeline(

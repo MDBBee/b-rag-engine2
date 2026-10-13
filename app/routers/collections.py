@@ -12,6 +12,7 @@ from app.utils.mongodb import (
     delete_collection_cascade,
     get_collection_chunks,
     list_collections,
+    projects,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,7 +43,6 @@ async def get_collection_metadata(collection_name: str, user: UserInfo = Depends
             raise HTTPException(status_code=404, detail=f"Collection '{collection_name}' not found")
         
         # Get project metadata from projects collection
-        from app.utils.mongodb import projects
         project_doc = await projects.find_one({
             "user_id": user.id,
             "collection_name": collection_name,
