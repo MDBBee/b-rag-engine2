@@ -1,7 +1,5 @@
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from app.typing.schemas import ChatMessageHistory
 from app.utils.retrieval_pipeline import (
     build_graph,
@@ -10,7 +8,6 @@ from app.utils.retrieval_pipeline import (
 )
 
 
-@pytest.mark.asyncio
 async def test_retrieval_pipeline_metadata_fast_path():
     events = []
     async for event_type, data in retrieval_pipeline(
@@ -26,7 +23,6 @@ async def test_retrieval_pipeline_metadata_fast_path():
     assert any(e[0] == "done" for e in events)
 
 
-@pytest.mark.asyncio
 async def test_retrieval_pipeline_with_graph():
     with patch("app.utils.retrieval_pipeline.mongodb") as mock_mongodb, \
          patch("app.utils.retrieval_pipeline.get_compiled_graph") as mock_get_graph:
@@ -60,7 +56,6 @@ async def test_retrieval_pipeline_with_graph():
         assert len(events) > 0
 
 
-@pytest.mark.asyncio
 async def test_retrieval_pipeline_with_messages():
     with patch("app.utils.retrieval_pipeline.mongodb") as mock_mongodb, \
          patch("app.utils.retrieval_pipeline.get_compiled_graph") as mock_get_graph:
@@ -109,7 +104,6 @@ def test_init_graph():
         assert compiled_graph is not None
 
 
-@pytest.mark.asyncio
 async def test_retrieval_pipeline_ollama_provider():
     with patch("app.utils.retrieval_pipeline.mongodb") as mock_mongodb, \
          patch("app.utils.retrieval_pipeline.get_compiled_graph") as mock_get_graph:
@@ -137,7 +131,6 @@ async def test_retrieval_pipeline_ollama_provider():
         mock_mongodb.get_llm.assert_called_once_with("llama2")
 
 
-@pytest.mark.asyncio
 async def test_retrieval_pipeline_ollama_no_model():
     events = []
     async for event_type, data in retrieval_pipeline(

@@ -5,7 +5,6 @@ import pytest
 from app.utils.ingestion_pipeline import ingestion_pipeline
 
 
-@pytest.mark.asyncio
 async def test_ingestion_pipeline_success():
     with patch("app.utils.ingestion_pipeline.check_collection_exists") as mock_check, \
          patch("app.utils.ingestion_pipeline.create_project") as mock_create_project, \
@@ -51,7 +50,6 @@ async def test_ingestion_pipeline_success():
         )
 
 
-@pytest.mark.asyncio
 async def test_ingestion_pipeline_collection_exists():
     with patch("app.utils.ingestion_pipeline.check_collection_exists") as mock_check:
         mock_check.return_value = True
@@ -64,7 +62,6 @@ async def test_ingestion_pipeline_collection_exists():
             )
 
 
-@pytest.mark.asyncio
 async def test_ingestion_pipeline_pdf_detection():
     with patch("app.utils.ingestion_pipeline.check_collection_exists") as mock_check, \
          patch("app.utils.ingestion_pipeline.create_project"), \
@@ -111,7 +108,6 @@ async def test_ingestion_pipeline_pdf_detection():
         assert page_count == 5
 
 
-@pytest.mark.asyncio
 async def test_ingestion_pipeline_metadata_enrichment():
     with patch("app.utils.ingestion_pipeline.check_collection_exists") as mock_check, \
          patch("app.utils.ingestion_pipeline.create_project"), \

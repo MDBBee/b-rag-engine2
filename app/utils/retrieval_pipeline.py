@@ -87,7 +87,7 @@ async def route_node(state: RAGState) -> dict:
     llm = state["llm"]
 
     try:
-        structured_llm = llm.with_structured_output(RouteDecision)
+        structured_llm = llm.with_structured_output(RouteDecision, method="json_schema")
 
         result = await structured_llm.ainvoke([
             SystemMessage(content="""Determine if the user's question should be answered from their uploaded documents or answered directly.
