@@ -5,7 +5,6 @@ import pytest
 from app.utils.ingestion_pipeline import ingestion_pipeline
 
 
-@pytest.mark.asyncio
 async def test_ingestion_pipeline_success():
     with patch("app.utils.ingestion_pipeline.check_collection_exists") as mock_check, \
          patch("app.utils.ingestion_pipeline.create_project") as mock_create_project, \
@@ -51,7 +50,6 @@ async def test_ingestion_pipeline_success():
         )
 
 
-@pytest.mark.asyncio
 async def test_ingestion_pipeline_collection_exists():
     with patch("app.utils.ingestion_pipeline.check_collection_exists") as mock_check:
         mock_check.return_value = True
@@ -64,7 +62,6 @@ async def test_ingestion_pipeline_collection_exists():
             )
 
 
-@pytest.mark.asyncio
 async def test_ingestion_pipeline_pdf_detection():
     with patch("app.utils.ingestion_pipeline.check_collection_exists") as mock_check, \
          patch("app.utils.ingestion_pipeline.create_project"), \
@@ -88,8 +85,15 @@ async def test_ingestion_pipeline_pdf_detection():
         mock_mongodb.embeddings.embed_documents.return_value = [[0.1, 0.2]]
         mock_mongodb.vectors.insert_many = AsyncMock()
         
+        mock_pages = []
+        for i in range(5):
+            mock_page = MagicMock()
+            mock_page.get_text.return_value = f"Page {i+1} content"
+            mock_pages.append(mock_page)
+        
         mock_doc = MagicMock()
         mock_doc.__len__ = MagicMock(return_value=5)
+        mock_doc.__iter__ = MagicMock(return_value=iter(mock_pages))
         mock_pymupdf.open.return_value = mock_doc
         
         result = await ingestion_pipeline(
@@ -104,7 +108,6 @@ async def test_ingestion_pipeline_pdf_detection():
         assert page_count == 5
 
 
-@pytest.mark.asyncio
 async def test_ingestion_pipeline_metadata_enrichment():
     with patch("app.utils.ingestion_pipeline.check_collection_exists") as mock_check, \
          patch("app.utils.ingestion_pipeline.create_project"), \

@@ -76,3 +76,20 @@ class CollectionChunksResponse(BaseModel):
     collection_name: str
     chunk_count: int
     chunks: list[ChunkResponse] = Field(default_factory=list)
+
+
+class QuizRequest(BaseModel):
+    collection_name: str
+    page_start: int | None = Field(default=None, ge=1)
+    page_end: int | None = Field(default=None, ge=1)
+    llm_provider: str | None = Field(default=None)
+    llm_model: str | None = Field(default=None)
+
+
+class QuizQuestion(BaseModel):
+    question: str
+    option_a: str
+    option_b: str
+    option_c: str
+    option_d: str
+    correct_answer: Literal["A", "B", "C", "D"]
