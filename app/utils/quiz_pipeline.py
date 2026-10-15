@@ -1,3 +1,4 @@
+import json
 import logging
 from collections.abc import AsyncGenerator
 
@@ -127,5 +128,58 @@ Document content:
     except Exception as e:
         logger.exception("Quiz generation failed")
         yield ("error", f"Failed to generate questions: {e}")
+
+    yield ("done", None)
+
+
+async def reword_quiz_questions(
+    questions: list[QuizQuestion],
+) -> AsyncGenerator[tuple[str, dict | str | None], None]:
+    """Reword questions using LLM while preserving meaning and correct answer.
+
+    Yields tuples of (event_type, data):
+    - ("progress", message) — status updates
+    - ("question", question_dict) — one reworded question at a time
+    - ("error", message) — fatal error
+    - ("done", None) — stream complete
+    """
+    yield ("progress", "Rewording questions...")
+
+    llm = mongodb.llm
+
+    questions_json = json.dumps([q.model_dump() for q in questions], indent=2)
+
+    prompt = f"""Reword each of the following quiz questions.
+
+Rules:
+- Keep the same meaning and difficulty
+- Reword the question text
+- Reword all 4 options (A, B, C, D)
+- Keep the same correct_answer key (A/B/C/D)
+- Do NOT change which option is correct
+- Make the rewording natural and varied
+
+Questions:
+{questions_json}
+
+Return the reworded questions in the same JSON format."""
+
+    try:
+        structured_llm = llm.with_structured_output(QuizQuestions, method="json_schema")
+        result = await structured_llm.ainvoke([prompt])
+
+        if not result or not result.questions:
+            yield ("error", "Failed to reword questions. Please try again.")
+            yield ("done", None)
+            return
+
+        for q in result.questions:
+            yield ("question", q.model_dump())
+
+        yield ("progress", f"Reworded {len(result.questions)} questions.")
+
+    except Exception as e:
+        logger.exception("Quiz reword failed")
+        yield ("error", f"Failed to reword questions: {e}")
 
     yield ("done", None)

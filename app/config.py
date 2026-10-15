@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     rephrase_enabled: bool = True
     max_rephrase_retries: int = 1
     ollama_base_url: str = "http://localhost:11434"
+    vision_model: str = ""
 
     @property
     def cors_origins_list(self) -> list[str]:
