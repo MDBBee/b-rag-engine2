@@ -93,7 +93,3 @@ class QuizQuestion(BaseModel):
     option_c: str
     option_d: str
     correct_answer: Literal["A", "B", "C", "D"]
-
-
-class RewordRequest(BaseModel):
-    questions: list[QuizQuestion]

@@ -46,11 +46,10 @@ def get_page_count(file_path: str) -> int:
 
 
 async def extract_text_by_page(file_path: str) -> list[dict]:
-    """Extract text per page for PDFs/DOCX/images. Returns list of {text, page_number}.
+    """Extract text per page for PDFs/DOCX/PPTX. Returns list of {text, page_number}.
     
     For PDFs: Extract directly with pymupdf
-    For DOCX: Convert to PDF first, then extract
-    For images: Use MarkItDown with OCR plugin (LLM vision)
+    For DOCX/PPTX: Convert to PDF first, then extract
     For TXT/HTML: Return full content with page_number=None
     """
     ext = Path(file_path).suffix.lower()
@@ -83,20 +82,6 @@ async def extract_text_by_page(file_path: str) -> list[dict]:
         doc.close()
         return page_texts
     
-    elif ext in {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".tif", ".webp"}:
-        from openai import OpenAI
-        client = OpenAI(
-            api_key=settings.openrouter_api_key,
-            base_url=settings.openrouter_base_url,
-        )
-        md = MarkItDown(
-            enable_plugins=True,
-            llm_client=client,
-            llm_model=settings.vision_model or settings.llm_model,
-        )
-        result = await asyncio.to_thread(md.convert, file_path)
-        return [{"text": result.text_content, "page_number": 1}]
-    
     else:
         md = MarkItDown()
         result = await asyncio.to_thread(md.convert, file_path)
@@ -126,16 +111,10 @@ async def ingestion_pipeline(
     if await check_collection_exists(user_id, collection_name):
         raise ValueError(f"Collection '{collection_name}' already exists for user '{user_id}'")
 
-    if transcript_text is not None:
-        document_type = "youtube"
-        page_texts = [{"text": transcript_text, "page_number": None}]
-        no_of_pages = 0
-    else:
-        if not file_path:
-            raise ValueError("Either file_path or transcript_text must be provided")
-        document_type = detect_document_type(file_path)
-        page_texts = await extract_text_by_page(file_path)
-        no_of_pages = len([p for p in page_texts if p["page_number"] is not None])
+    document_type = detect_document_type(file_path)
+    
+    page_texts = await extract_text_by_page(file_path)
+    no_of_pages = len([p for p in page_texts if p["page_number"] is not None])
 
     resolved_chunk_size = chunk_size if chunk_size is not None else settings.chunk_size
     resolved_chunk_overlap = chunk_overlap if chunk_overlap is not None else settings.chunk_overlap

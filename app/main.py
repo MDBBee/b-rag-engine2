@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.routers import collections, file_processing, ingestion, quiz, retrieval, youtube_ingest
+from app.routers import collections, file_processing, ingestion, quiz, retrieval
 from app.utils.mongodb import close_mongodb, init_mongodb
 from app.utils.retrieval_pipeline import init_graph
 
