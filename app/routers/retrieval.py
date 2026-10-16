@@ -16,10 +16,12 @@ router = APIRouter(
 )
 
 NODE_EVENT_MAP = {
-    "router": ("searching", "Analyzing query..."),
-    "retrieve": ("searching", "Searching documents..."),
+    "classify_intent": ("searching", "Analyzing query..."),
+    "retrieve_all": ("searching", "Loading document..."),
+    "retrieve_top_k": ("searching", "Searching documents..."),
     "rephrase_query": ("rephrasing", "Rephrasing query..."),
     "generate": ("generating", "Generating answer..."),
+    "generate_direct": ("generating", "Generating answer..."),
 }
 
 

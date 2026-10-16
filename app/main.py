@@ -13,7 +13,7 @@ from app.utils.retrieval_pipeline import init_graph
 
 load_dotenv()
 logging.basicConfig(
-    level=logging.WARNING,
+    level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
 

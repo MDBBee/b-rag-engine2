@@ -49,7 +49,7 @@ async def ingest_youtube(
 
     full_text = transcript_result["full_text"]
     language = transcript_result.get("language", "unknown")
-    collection_name = video_id_to_collection_name(video_id)
+    collection_name = request.collection_name or video_id_to_collection_name(video_id)
     filename = f"youtube_{video_id}.txt"
 
     try:

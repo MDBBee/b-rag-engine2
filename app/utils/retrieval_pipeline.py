@@ -11,7 +11,6 @@ from app.config import settings
 from app.typing.schemas import ChatMessageHistory
 from app.utils import mongodb
 
-# Module-level cache for compiled graph
 compiled_graph = None
 cached_rephrase_enabled = None
 
@@ -30,43 +29,17 @@ def get_compiled_graph():
     return compiled_graph
 
 
-METADATA_PATTERNS = {
-    "file_name": [
-        "file name", "name of the doc", "document name", "what file", 
-        "what document", "doc name", "filename"
-    ],
-    "project_name": [
-        "project name", "what project", "project"
-    ],
-    "collection_name": [
-        "collection name", "collection"
-    ],
-}
-
-
-def check_metadata_query(query: str, file_name: str, project_name: str, collection_name: str) -> str | None:
-    """Check if query is asking for metadata. Returns natural language answer or None."""
-    query_lower = query.lower()
-    
-    for field, patterns in METADATA_PATTERNS.items():
-        for pattern in patterns:
-            if pattern in query_lower:
-                value = locals().get(field)
-                if value:
-                    field_label = field.replace("_", " ")
-                    return f"The {field_label} is {value}."
-    
-    return None
-
-
-class RouteDecision(BaseModel):
-    """Classification of whether document retrieval is needed."""
-    needs_retrieval: bool = Field(description="True if question should be answered from uploaded documents")
+class IntentDecision(BaseModel):
+    """Classification of query intent."""
+    intent: Literal["casual", "summary", "specific"] = Field(
+        description="casual: greetings/chat, summary: overview/main points, specific: targeted question"
+    )
 
 
 class RAGState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
-    route: str
+    current_query: str
+    intent: str
     context: str
     collection_name: str
     user_id: str
@@ -75,49 +48,38 @@ class RAGState(TypedDict):
     retrieved_docs: list
     llm: object
     top_k: int
-    current_query: str
     retry_count: int
     max_retries: int
 
 
-async def route_node(state: RAGState) -> dict:
-    """Classify query intent: needs document retrieval or direct answer."""
-    messages = state["messages"]
-    query = messages[-1].content if messages else ""
+async def classify_intent(state: RAGState) -> dict:
+    """Classify query intent using structured output."""
+    query = state["current_query"]
     llm = state["llm"]
 
     try:
-        structured_llm = llm.with_structured_output(RouteDecision, method="json_schema")
-
+        structured_llm = llm.with_structured_output(IntentDecision, method="json_schema")
         result = await structured_llm.ainvoke([
-            SystemMessage(content="""Determine if the user's question should be answered from their uploaded documents or answered directly.
+            SystemMessage(content="""Classify the user's query:
 
-TRUE (retrieve from documents) — ANY question that COULD be answered by the uploaded documents:
-- Questions about document content, topics, concepts, or information
-- Questions about document metadata: author, title, date, page count, file name, etc.
-- Questions that reference "the document", "the file", "what I uploaded", "my documents"
-- Questions about what's IN the documents: "does it mention...", "is there a section about..."
-- Questions about document structure: "how many pages...", "what chapters..."
-- Examples: "What does it say about X?", "Who is the author?", "When was it written?", "Does it mention AI?", "What are the main points?"
+CASUAL: greetings, thanks, general chat, time/date questions, meta-questions about the assistant
+- Examples: "hi", "hello", "how are you", "what's today's date", "thanks", "good morning"
 
-FALSE (answer directly, no retrieval) — ONLY these specific cases:
-- Greetings: "hi", "hello", "hey", "good morning"
-- Thanks/gratitude: "thanks", "thank you"
-- Questions about the conversation itself: "what is my name?", "what was my last question?"
-- Meta-questions about you (the AI): "who are you?", "what can you do?"
-- Personal statements: "my name is X", "I am from Y"
-- General knowledge COMPLETELY unrelated to documents: "what time is it?", "what's the weather?"
+SUMMARY: requests for overview, main points, comprehensive coverage
+- Examples: "summarize this", "give me an overview", "what are the main points", "what's in this document"
 
-IMPORTANT: If the question could possibly relate to the uploaded documents in ANY way, choose TRUE. When in doubt, ALWAYS choose TRUE."""),
+SPECIFIC: targeted question about document content or concepts
+- Examples: "what does X mean", "explain the methodology", "tell me about the author's argument"
+
+IMPORTANT: If the query asks for ANY kind of overview or comprehensive coverage, classify as SUMMARY. When in doubt between summary and specific, choose SPECIFIC."""),
             HumanMessage(content=query),
         ])
 
         if result is None:
-            model_name = getattr(llm, 'model', 'unknown')
-            raise ValueError(f"Model '{model_name}' does not support tool/function calling")
+            return {"intent": "specific"}
 
-        return {"route": "retrieve" if result.needs_retrieval else "direct"}
-    
+        return {"intent": result.intent}
+
     except Exception as e:
         model_name = getattr(llm, 'model', 'unknown')
         raise ValueError(
@@ -125,39 +87,54 @@ IMPORTANT: If the question could possibly relate to the uploaded documents in AN
         ) from e
 
 
-async def retrieve_node(state: RAGState) -> dict:
-    """Retrieve relevant documents from vector store with deduplication."""
+async def retrieve_all(state: RAGState) -> dict:
+    """Retrieve all chunks in document order for summaries."""
+    collection_name = state.get("collection_name", "default")
+    user_id = state.get("user_id", "")
+    max_chunks = settings.max_context_chunks
+
+    cursor = mongodb.vectors.find(
+        {"user_id": user_id, "collection_name": collection_name}
+    ).sort("chunk_index", 1).limit(max_chunks)
+
+    docs = []
+    async for doc in cursor:
+        docs.append(doc)
+
+    if not docs:
+        return {"context": "", "retrieved_docs": []}
+
+    context_parts = []
+    for i, doc in enumerate(docs, 1):
+        source = doc.get("metadata", {}).get("source", "Unknown")
+        chunk_idx = doc.get("metadata", {}).get("chunk_index", i)
+        context_parts.append(f"[Source: {source}, chunk {chunk_idx}]\n{doc.get('content', '')}")
+
+    context = "\n\n" + "=" * 60 + "\n\n".join(context_parts)
+    return {"context": context, "retrieved_docs": docs}
+
+
+async def retrieve_top_k(state: RAGState) -> dict:
+    """Retrieve relevant documents from vector store."""
     query = state.get("current_query") or state["messages"][-1].content
     user_id = state.get("user_id", "")
     collection_name = state.get("collection_name", "default")
     top_k = state.get("top_k", settings.top_k)
 
     pre_filter = {"user_id": user_id, "collection_name": collection_name}
-    docs = await mongodb.vectorstore.asimilarity_search(query, k=top_k * 2, pre_filter=pre_filter)
+    docs = await mongodb.vectorstore.asimilarity_search(query, k=top_k, pre_filter=pre_filter)
 
     if not docs:
         return {"context": "", "retrieved_docs": []}
 
-    seen = set()
-    unique_docs = []
-    for doc in docs:
-        source = doc.metadata.get("source", "Unknown")
-        chunk_idx = doc.metadata.get("chunk_index", "N/A")
-        key = (source, chunk_idx)
-        if key not in seen:
-            seen.add(key)
-            unique_docs.append(doc)
-            if len(unique_docs) >= top_k:
-                break
-
     context_parts = []
-    for i, doc in enumerate(unique_docs, 1):
+    for i, doc in enumerate(docs, 1):
         source = doc.metadata.get("source", "Unknown")
         chunk_idx = doc.metadata.get("chunk_index", "N/A")
-        context_parts.append(f"[Source {i}: {source}, chunk {chunk_idx}]\n{doc.page_content}")
+        context_parts.append(f"[Source: {source}, chunk {chunk_idx}]\n{doc.page_content}")
 
     context = "\n\n" + "=" * 60 + "\n\n".join(context_parts)
-    return {"context": context, "retrieved_docs": unique_docs}
+    return {"context": context, "retrieved_docs": docs}
 
 
 async def rephrase_query_node(state: RAGState) -> dict:
@@ -165,21 +142,40 @@ async def rephrase_query_node(state: RAGState) -> dict:
     query = state.get("current_query") or state["messages"][-1].content
     retry_count = state.get("retry_count", 0)
     llm = state["llm"]
-    
+
     response = await llm.ainvoke([
         SystemMessage(content="Rephrase this query to improve retrieval. Use different keywords or synonyms. Return ONLY the rephrased query, no explanation."),
         HumanMessage(content=query)
     ])
-    
+
     return {
         "current_query": response.content.strip(),
         "retry_count": retry_count + 1
     }
 
 
-async def generate_node(state: RAGState) -> dict:
-    """Generate answer using LLM."""
-    route = state["route"]
+async def generate_direct(state: RAGState) -> dict:
+    """Generate casual response without document context."""
+    messages = state["messages"]
+    llm = state["llm"]
+    today = datetime.now(tz=UTC).strftime("%B %d, %Y")
+
+    system_prompt = f"""You are a friendly research assistant. Today's date is {today}. Engage naturally in conversation.
+
+When creating markdown tables, ensure each row is on its own line with proper formatting. Example:
+| Column 1 | Column 2 |
+|----------|----------|
+| Data 1   | Data 2   |"""
+
+    llm_messages = [SystemMessage(content=system_prompt)] + messages
+
+    response = await llm.ainvoke(llm_messages)
+    return {"messages": [response]}
+
+
+async def generate(state: RAGState) -> dict:
+    """Generate answer with document context."""
+    intent = state["intent"]
     messages = state["messages"]
     project_name = state.get("project_name", "")
     file_name = state.get("file_name", "")
@@ -195,25 +191,32 @@ async def generate_node(state: RAGState) -> dict:
             parts.append(f'document "{file_name}"')
         context_prefix = f"You are assisting with {' and '.join(parts)}. Today's date is {today}. "
 
-    if route == "retrieve" and state.get("context"):
-        system_prompt = f"""{context_prefix}You are a helpful research assistant. Answer questions based on the provided document context and conversation history.
+    if intent == "summary":
+        system_prompt = f"""{context_prefix}You are a helpful research assistant. Provide a comprehensive summary based on the full document content provided below. Cover all major topics and key points in a well-structured manner.
 
 Guidelines:
-- Use the document context to answer questions about the documents
-- Use conversation history to remember what the user has told you (their name, preferences, previous questions)
-- If the context doesn't contain relevant information, you can answer from general knowledge or conversation history
+- Use the full document context to create a thorough summary
+- Organize the summary logically, covering all sections
 - Be conversational and natural, not robotic
+- When creating markdown tables, ensure each row is on its own line with proper formatting
 
 Context:
 {state['context']}"""
     else:
-        system_prompt = f"""{context_prefix}You are a friendly and helpful research assistant. You help users with their documents and engage in natural conversation.
+        system_prompt = f"""{context_prefix}You are a helpful research assistant. Answer questions based on the provided document context and conversation history.
 
 Guidelines:
-- Use conversation history to remember what the user has told you (their name, preferences, previous questions)
-- Answer general knowledge questions naturally and helpfully
-- Be conversational, warm, and engaging
-- If asked about documents, suggest the user upload documents or ask specific questions about their topic"""
+- Use the document context to answer questions about the documents
+- Use conversation history to remember what the user has told you
+- If the context doesn't contain relevant information, you can answer from general knowledge
+- Be conversational and natural, not robotic
+- When creating markdown tables, ensure each row is on its own line with proper formatting. Example:
+| Column 1 | Column 2 |
+|----------|----------|
+| Data 1   | Data 2   |
+
+Context:
+{state['context']}"""
 
     llm_messages = [SystemMessage(content=system_prompt)] + messages
 
@@ -221,9 +224,14 @@ Guidelines:
     return {"messages": [response]}
 
 
-def route_decision(state: RAGState) -> Literal["retrieve", "generate"]:
-    """Route to retrieve or generate based on classification."""
-    return "retrieve" if state["route"] == "retrieve" else "generate"
+def intent_router(state: RAGState) -> Literal["generate_direct", "retrieve_all", "retrieve_top_k"]:
+    """Route based on classified intent."""
+    intent = state["intent"]
+    if intent == "casual":
+        return "generate_direct"
+    elif intent == "summary":
+        return "retrieve_all"
+    return "retrieve_top_k"
 
 
 def post_retrieve_decision(state: RAGState) -> Literal["generate", "rephrase_query"]:
@@ -231,7 +239,7 @@ def post_retrieve_decision(state: RAGState) -> Literal["generate", "rephrase_que
     retrieved_docs = state.get("retrieved_docs", [])
     retry_count = state.get("retry_count", 0)
     max_retries = state.get("max_retries", 1)
-    
+
     if retrieved_docs or retry_count >= max_retries:
         return "generate"
     return "rephrase_query"
@@ -240,23 +248,26 @@ def post_retrieve_decision(state: RAGState) -> Literal["generate", "rephrase_que
 def build_graph():
     """Build and compile the RAG graph."""
     graph = StateGraph(RAGState)
-    graph.add_node("router", route_node)
-    graph.add_node("retrieve", retrieve_node)
-    graph.add_node("generate", generate_node)
-    
+    graph.add_node("classify_intent", classify_intent)
+    graph.add_node("generate_direct", generate_direct)
+    graph.add_node("retrieve_all", retrieve_all)
+    graph.add_node("retrieve_top_k", retrieve_top_k)
+    graph.add_node("generate", generate)
+
+    graph.add_edge(START, "classify_intent")
+    graph.add_conditional_edges("classify_intent", intent_router, ["generate_direct", "retrieve_all", "retrieve_top_k"])
+    graph.add_edge("retrieve_all", "generate")
+    graph.add_edge("generate_direct", END)
+
     if settings.rephrase_enabled:
         graph.add_node("rephrase_query", rephrase_query_node)
-        graph.add_edge(START, "router")
-        graph.add_conditional_edges("router", route_decision, ["retrieve", "generate"])
-        graph.add_conditional_edges("retrieve", post_retrieve_decision, ["generate", "rephrase_query"])
-        graph.add_edge("rephrase_query", "retrieve")
-        graph.add_edge("generate", END)
+        graph.add_conditional_edges("retrieve_top_k", post_retrieve_decision, ["generate", "rephrase_query"])
+        graph.add_edge("rephrase_query", "retrieve_top_k")
     else:
-        graph.add_edge(START, "router")
-        graph.add_conditional_edges("router", route_decision, ["retrieve", "generate"])
-        graph.add_edge("retrieve", "generate")
-        graph.add_edge("generate", END)
-    
+        graph.add_edge("retrieve_top_k", "generate")
+
+    graph.add_edge("generate", END)
+
     return graph.compile()
 
 
@@ -273,21 +284,6 @@ async def retrieval_pipeline(
     llm_model: str | None = None,
 ) -> AsyncGenerator[tuple[str, str | list[dict]], None]:
     """Stream RAG response with conversation history from frontend."""
-    
-    # Fast-path: metadata queries (no graph needed)
-    metadata_answer = check_metadata_query(
-        query, 
-        file_name or "", 
-        project_name or "", 
-        collection_name
-    )
-    if metadata_answer:
-        yield ("sources", [])
-        for char in metadata_answer:
-            yield ("token", char)
-        yield ("done", None)
-        return
-    
     all_messages = [m.model_dump() for m in messages] + [{"role": "user", "content": query}]
 
     resolved_provider = llm_provider or "openrouter"
@@ -317,7 +313,7 @@ async def retrieval_pipeline(
     }
 
     sources_yielded = False
-    node_names = {"router", "retrieve", "rephrase_query", "generate"}
+    node_names = {"classify_intent", "retrieve_all", "retrieve_top_k", "rephrase_query", "generate_direct", "generate"}
 
     try:
         async for event in rag_pipeline.astream_events(
@@ -327,12 +323,12 @@ async def retrieval_pipeline(
             event_type = event["event"]
             metadata = event.get("metadata", {})
             node_name = metadata.get("langgraph_node")
-            
+
             if event_type == "on_chain_start" and node_name in node_names:
                 yield ("node_start", node_name)
 
             elif event_type == "on_chat_model_stream":
-                if node_name == "generate":
+                if node_name in ("generate", "generate_direct"):
                     chunk = event["data"].get("chunk")
                     if chunk and chunk.content:
                         if not sources_yielded:
@@ -340,21 +336,26 @@ async def retrieval_pipeline(
                             sources_yielded = True
                         yield ("token", chunk.content)
 
-            elif event_type == "on_chain_end" and node_name == "retrieve":
+            elif event_type == "on_chain_end" and node_name in ("retrieve_all", "retrieve_top_k"):
                 output = event.get("data", {}).get("output", {})
 
-                # Defensive check: output might not be a dict
                 if isinstance(output, dict):
                     retrieved_docs = output.get("retrieved_docs", [])
                     if retrieved_docs and not sources_yielded:
-                        sources = [
-                            {
-                                "chunk_id": str(doc.metadata.get("chunk_index", i)),
-                                "content_preview": doc.page_content[:300],
-                                "source": doc.metadata.get("source"),
-                            }
-                            for i, doc in enumerate(retrieved_docs)
-                        ]
+                        sources = []
+                        for i, doc in enumerate(retrieved_docs):
+                            if isinstance(doc, dict):
+                                sources.append({
+                                    "chunk_id": str(doc.get("metadata", {}).get("chunk_index", i)),
+                                    "content_preview": doc.get("content", "")[:300],
+                                    "source": doc.get("metadata", {}).get("source"),
+                                })
+                            else:
+                                sources.append({
+                                    "chunk_id": str(doc.metadata.get("chunk_index", i)),
+                                    "content_preview": doc.page_content[:300],
+                                    "source": doc.metadata.get("source"),
+                                })
                         yield ("sources", sources)
                         sources_yielded = True
     except ValueError as e:

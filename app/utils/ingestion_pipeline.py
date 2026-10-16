@@ -19,7 +19,7 @@ from app.utils.text_splitters import get_splitter
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".html"}
+SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".html", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".tif", ".webp"}
 
 
 def detect_document_type(file_path: str) -> str:
@@ -57,11 +57,53 @@ async def extract_text_by_page(file_path: str) -> list[dict]:
     if ext == ".pdf":
         doc = pymupdf.open(file_path)
         page_texts = []
+        total_text_length = 0
+        total_images = 0
+        
         for page_num, page in enumerate(doc, 1):
             text = page.get_text()
+            images = page.get_images()
+            
             if text.strip():
                 page_texts.append({"text": text, "page_number": page_num})
+                total_text_length += len(text.strip())
+            
+            total_images += len(images)
+        
         doc.close()
+        
+        logger.info(
+            f"PDF extraction: {total_text_length} chars of text, {total_images} images found in {file_path}"
+        )
+        
+        # Trigger OCR if minimal text AND has images (scanned document)
+        if total_text_length < settings.ocr_text_threshold and total_images > 0:
+            logger.info(
+                f"PDF appears to be a scanned document (text < {settings.ocr_text_threshold} chars, has {total_images} images), "
+                f"attempting OCR for: {file_path}"
+            )
+            try:
+                from openai import OpenAI
+                client = OpenAI(
+                    api_key=settings.openrouter_api_key,
+                    base_url=settings.openrouter_base_url,
+                )
+                md = MarkItDown(
+                    enable_plugins=True,
+                    llm_client=client,
+                    llm_model=settings.vision_model or settings.llm_model,
+                )
+                result = await asyncio.to_thread(md.convert, file_path)
+                if result.text_content and result.text_content.strip():
+                    logger.info(f"OCR successfully extracted {len(result.text_content)} chars from scanned PDF")
+                    return [{"text": result.text_content, "page_number": 1}]
+                else:
+                    logger.warning(f"OCR failed to extract text from scanned PDF: {file_path}")
+                    return []
+            except Exception:
+                logger.exception(f"OCR failed for {file_path}")
+                return []
+        
         return page_texts
     
     elif ext in {".docx"}:
