@@ -106,6 +106,7 @@ Rules:
 - Questions should test understanding, not just recall
 - Vary difficulty across questions
 - Cover different sections/pages of the document
+- When using structured content in questions or options (tables, lists, diagrams, code blocks), ensure every element is on its own line with proper spacing
 
 Document content:
 {context}"""

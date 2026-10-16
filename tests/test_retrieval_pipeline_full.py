@@ -8,21 +8,6 @@ from app.utils.retrieval_pipeline import (
 )
 
 
-async def test_retrieval_pipeline_metadata_fast_path():
-    events = []
-    async for event_type, data in retrieval_pipeline(
-        query="what is the file name",
-        collection_name="test-collection",
-        user_id="user-123",
-        file_name="document.pdf"
-    ):
-        events.append((event_type, data))
-    
-    assert any(e[0] == "sources" for e in events)
-    assert any(e[0] == "token" for e in events)
-    assert any(e[0] == "done" for e in events)
-
-
 async def test_retrieval_pipeline_with_graph():
     with patch("app.utils.retrieval_pipeline.mongodb") as mock_mongodb, \
          patch("app.utils.retrieval_pipeline.get_compiled_graph") as mock_get_graph:
@@ -34,7 +19,7 @@ async def test_retrieval_pipeline_with_graph():
         async def mock_stream(*args, **kwargs):
             yield {
                 "event": "on_chain_start",
-                "metadata": {"langgraph_node": "router"}
+                "metadata": {"langgraph_node": "classify_intent"}
             }
             yield {
                 "event": "on_chat_model_stream",

@@ -162,10 +162,8 @@ async def generate_direct(state: RAGState) -> dict:
 
     system_prompt = f"""You are a friendly research assistant. Today's date is {today}. Engage naturally in conversation.
 
-When creating markdown tables, ensure each row is on its own line with proper formatting. Example:
-| Column 1 | Column 2 |
-|----------|----------|
-| Data 1   | Data 2   |"""
+When using structured markdown content (tables, lists, diagrams, code blocks, or any visual layout), ensure every element is on its own line with proper spacing. Never concatenate multiple lines together.
+"""
 
     llm_messages = [SystemMessage(content=system_prompt)] + messages
 
@@ -198,7 +196,7 @@ Guidelines:
 - Use the full document context to create a thorough summary
 - Organize the summary logically, covering all sections
 - Be conversational and natural, not robotic
-- When creating markdown tables, ensure each row is on its own line with proper formatting
+- When using structured markdown content (tables, lists, diagrams, code blocks, or any visual layout), ensure every element is on its own line with proper spacing. Never concatenate multiple lines together.
 
 Context:
 {state['context']}"""
@@ -210,10 +208,7 @@ Guidelines:
 - Use conversation history to remember what the user has told you
 - If the context doesn't contain relevant information, you can answer from general knowledge
 - Be conversational and natural, not robotic
-- When creating markdown tables, ensure each row is on its own line with proper formatting. Example:
-| Column 1 | Column 2 |
-|----------|----------|
-| Data 1   | Data 2   |
+- When using structured markdown content (tables, lists, diagrams, code blocks, or any visual layout), ensure every element is on its own line with proper spacing. Never concatenate multiple lines together.
 
 Context:
 {state['context']}"""
