@@ -7,13 +7,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.routers import collections, file_processing, ingestion, quiz, retrieval
+from app.routers import collections, file_processing, ingestion, quiz, retrieval, youtube_ingest
 from app.utils.mongodb import close_mongodb, init_mongodb
 from app.utils.retrieval_pipeline import init_graph
 
 load_dotenv()
 logging.basicConfig(
-    level=logging.WARNING,
+    level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
 
@@ -46,6 +46,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 app.include_router(ingestion.router)
+app.include_router(youtube_ingest.router)
 app.include_router(retrieval.router)
 app.include_router(collections.router)
 app.include_router(file_processing.router)

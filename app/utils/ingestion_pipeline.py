@@ -14,12 +14,12 @@ from markitdown import MarkItDown
 from app.config import settings
 from app.typing.schemas import ChunkData, SummarizedChunk
 from app.utils import mongodb
-from app.utils.mongodb import check_collection_exists, create_project
+from app.utils.mongodb import create_project
 from app.utils.text_splitters import get_splitter
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".html"}
+SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".html", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".tif", ".webp"}
 
 
 def detect_document_type(file_path: str) -> str:
@@ -57,11 +57,53 @@ async def extract_text_by_page(file_path: str) -> list[dict]:
     if ext == ".pdf":
         doc = pymupdf.open(file_path)
         page_texts = []
+        total_text_length = 0
+        total_images = 0
+        
         for page_num, page in enumerate(doc, 1):
             text = page.get_text()
+            images = page.get_images()
+            
             if text.strip():
                 page_texts.append({"text": text, "page_number": page_num})
+                total_text_length += len(text.strip())
+            
+            total_images += len(images)
+        
         doc.close()
+        
+        logger.info(
+            f"PDF extraction: {total_text_length} chars of text, {total_images} images found in {file_path}"
+        )
+        
+        # Trigger OCR if minimal text AND has images (scanned document)
+        if total_text_length < settings.ocr_text_threshold and total_images > 0:
+            logger.info(
+                f"PDF appears to be a scanned document (text < {settings.ocr_text_threshold} chars, has {total_images} images), "
+                f"attempting OCR for: {file_path}"
+            )
+            try:
+                from openai import OpenAI
+                client = OpenAI(
+                    api_key=settings.openrouter_api_key,
+                    base_url=settings.openrouter_base_url,
+                )
+                md = MarkItDown(
+                    enable_plugins=True,
+                    llm_client=client,
+                    llm_model=settings.vision_model or settings.llm_model,
+                )
+                result = await asyncio.to_thread(md.convert, file_path)
+                if result.text_content and result.text_content.strip():
+                    logger.info(f"OCR successfully extracted {len(result.text_content)} chars from scanned PDF")
+                    return [{"text": result.text_content, "page_number": 1}]
+                else:
+                    logger.warning(f"OCR failed to extract text from scanned PDF: {file_path}")
+                    return []
+            except Exception:
+                logger.exception(f"OCR failed for {file_path}")
+                return []
+        
         return page_texts
     
     elif ext in {".docx"}:
@@ -89,7 +131,7 @@ async def extract_text_by_page(file_path: str) -> list[dict]:
 
 
 async def ingestion_pipeline(
-    file_path: str,
+    file_path: str | None,
     filename: str,
     collection_name: str,
     user_id: str,
@@ -97,14 +139,21 @@ async def ingestion_pipeline(
     chunk_size: int | None = None,
     chunk_overlap: int | None = None,
     text_splitter: str | None = None,
+    transcript_text: str | None = None,
 ) -> tuple[int, str, int, list[ChunkData], list[SummarizedChunk]]:
     """Convert document to markdown, chunk, and store in MongoDB vector database.
+    
+    Args:
+        file_path: Path to uploaded file (None for transcript ingestion)
+        transcript_text: Raw text to ingest directly (skips file extraction)
     
     Returns:
         tuple: (chunk_count, document_type, no_of_pages, chunks, summarized_chunks)
     """
-    if await check_collection_exists(user_id, collection_name):
-        raise ValueError(f"Collection '{collection_name}' already exists for user '{user_id}'")
+    # Get existing chunk count for this collection
+    existing_count = await mongodb.vectors.count_documents(
+        {"user_id": user_id, "collection_name": collection_name}
+    )
 
     document_type = detect_document_type(file_path)
     
@@ -161,11 +210,12 @@ async def ingestion_pipeline(
         logger.warning("Text splitter produced zero chunks for: %s", filename)
         raise HTTPException(status_code=400, detail="Document produced no content after splitting")
     
+    # Assign chunk indices starting from existing_count (for append) or 0 (for new)
     for i, chunk in enumerate(final_chunks):
         chunk.metadata.update({
             "source": filename,
-            "chunk_index": i,
-            "total_chunks": len(final_chunks),
+            "chunk_index": existing_count + i,
+            "total_chunks": existing_count + len(final_chunks),
         })
 
     texts = [chunk.page_content for chunk in final_chunks]
@@ -188,7 +238,7 @@ async def ingestion_pipeline(
         doc = {
             "user_id": user_id,
             "collection_name": collection_name,
-            "chunk_index": i,
+            "chunk_index": existing_count + i,
             "content": chunk.page_content,
             "embedding": vector,
             "metadata": chunk.metadata,
@@ -198,14 +248,35 @@ async def ingestion_pipeline(
 
     await mongodb.vectors.insert_many(docs_to_insert)
 
-    await create_project(
-        user_id=user_id,
-        name=project_name or filename,
-        collection_name=collection_name,
-        file_name=filename,
-        chunk_count=len(docs_to_insert),
-        document_type=document_type,
+    # Check if project already exists
+    existing_project = await mongodb.projects.find_one(
+        {"user_id": user_id, "collection_name": collection_name}
     )
+    
+    if existing_project:
+        # Append: update chunk_count and file_name (comma-separated)
+        existing_file_names = existing_project.get("file_name", "")
+        new_file_names = f"{existing_file_names}, {filename}" if existing_file_names else filename
+        
+        await mongodb.projects.update_one(
+            {"user_id": user_id, "collection_name": collection_name},
+            {
+                "$set": {
+                    "chunk_count": existing_count + len(docs_to_insert),
+                    "file_name": new_file_names,
+                }
+            }
+        )
+    else:
+        # Create new project
+        await create_project(
+            user_id=user_id,
+            name=project_name or filename,
+            collection_name=collection_name,
+            file_name=filename,
+            chunk_count=len(docs_to_insert),
+            document_type=document_type,
+        )
 
     chunks = [
         ChunkData(
