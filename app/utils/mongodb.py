@@ -259,3 +259,33 @@ async def get_collection_chunks(user_id: str, collection_name: str) -> dict:
         "chunk_count": len(chunks),
         "chunks": chunks,
     }
+
+
+async def delete_vectors_by_source(user_id: str, collection_name: str, file_name: str) -> int:
+    """Delete all vectors for a specific file (identified by metadata.source)."""
+    result = await vectors.delete_many({
+        "user_id": user_id,
+        "collection_name": collection_name,
+        "metadata.source": file_name,
+    })
+    logger.info(
+        "Delete file vectors: user=%s collection=%s file=%s deleted=%d",
+        user_id, collection_name, file_name, result.deleted_count,
+    )
+    return result.deleted_count
+
+
+async def update_project_metadata(user_id: str, collection_name: str, name: str | None = None) -> bool:
+    """Update project metadata (name, description, etc.)."""
+    update_data = {}
+    if name is not None:
+        update_data["name"] = name
+
+    if not update_data:
+        return False
+
+    result = await projects.update_one(
+        {"user_id": user_id, "collection_name": collection_name},
+        {"$set": update_data},
+    )
+    return result.modified_count > 0

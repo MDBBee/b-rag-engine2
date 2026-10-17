@@ -1,18 +1,21 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.middleware.auth import UserInfo, get_current_user
 from app.typing.schemas import (
     CascadeDeleteResponse,
     CollectionChunksResponse,
     CollectionInfo,
+    CollectionUpdateRequest,
 )
 from app.utils.mongodb import (
     delete_collection_cascade,
+    delete_vectors_by_source,
     get_collection_chunks,
     list_collections,
     projects,
+    update_project_metadata,
 )
 
 logger = logging.getLogger(__name__)
@@ -93,3 +96,43 @@ async def delete_collection(collection_name: str, user: UserInfo = Depends(get_c
     except Exception:
         logger.exception("Failed to delete collection")
         raise HTTPException(status_code=500, detail="Failed to delete collection")
+
+
+@router.delete("/{collection_name}/documents", response_model=CascadeDeleteResponse)
+async def delete_document(
+    collection_name: str,
+    file_name: str = Query(...),
+    user: UserInfo = Depends(get_current_user),
+):
+    """Delete all vectors for a specific file within a collection."""
+    try:
+        deleted = await delete_vectors_by_source(user.id, collection_name, file_name)
+        if deleted == 0:
+            raise HTTPException(status_code=404, detail=f"No vectors found for file '{file_name}'")
+        return CascadeDeleteResponse(deleted_vectors=deleted)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to delete document vectors")
+        raise HTTPException(status_code=500, detail="Failed to delete document vectors")
+
+
+@router.patch("/{collection_name}")
+async def update_collection(
+    collection_name: str,
+    request: CollectionUpdateRequest,
+    user: UserInfo = Depends(get_current_user),
+):
+    """Update project metadata (name, description, etc.)."""
+    try:
+        updated = await update_project_metadata(
+            user.id, collection_name, name=request.name
+        )
+        if not updated:
+            raise HTTPException(status_code=404, detail=f"Collection '{collection_name}' not found")
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to update collection metadata")
+        raise HTTPException(status_code=500, detail="Failed to update collection metadata")
