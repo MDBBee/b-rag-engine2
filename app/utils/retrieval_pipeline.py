@@ -163,6 +163,14 @@ async def generate_direct(state: RAGState) -> dict:
     system_prompt = f"""You are a friendly research assistant. Today's date is {today}. Engage naturally in conversation.
 
 When using structured markdown content (tables, lists, diagrams, code blocks, or any visual layout), ensure every element is on its own line with proper spacing. Never concatenate multiple lines together.
+
+For ASCII art or diagrams, ALWAYS use code blocks (```) and ensure each line has an explicit newline:
+```
++-------------------+
+| Initiating | Planning |
++-------------------+
+```
+
 """
 
     llm_messages = [SystemMessage(content=system_prompt)] + messages
@@ -197,6 +205,12 @@ Guidelines:
 - Organize the summary logically, covering all sections
 - Be conversational and natural, not robotic
 - When using structured markdown content (tables, lists, diagrams, code blocks, or any visual layout), ensure every element is on its own line with proper spacing. Never concatenate multiple lines together.
+- For ASCII art or diagrams, ALWAYS use code blocks (```) and ensure each line has an explicit newline:
+```
++-------------------+
+| Initiating | Planning |
++-------------------+
+```
 
 Context:
 {state['context']}"""
@@ -209,6 +223,12 @@ Guidelines:
 - If the context doesn't contain relevant information, you can answer from general knowledge
 - Be conversational and natural, not robotic
 - When using structured markdown content (tables, lists, diagrams, code blocks, or any visual layout), ensure every element is on its own line with proper spacing. Never concatenate multiple lines together.
+- For ASCII art or diagrams, ALWAYS use code blocks (```) and ensure each line has an explicit newline:
+```
++-------------------+
+| Initiating | Planning |
++-------------------+
+```
 
 Context:
 {state['context']}"""
