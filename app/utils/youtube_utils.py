@@ -113,6 +113,7 @@ class YouTubeURLRequest(BaseModel):
     url: str
     languages: list[str] = Field(default_factory=lambda: ["en"])
     collection_name: str | None = Field(default=None)
+    file_name: str | None = Field(default=None)
 
     @field_validator("url")
     @classmethod

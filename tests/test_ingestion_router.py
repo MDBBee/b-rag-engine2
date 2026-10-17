@@ -6,7 +6,7 @@ from app.main import app
 def test_ingest_success(client_with_user, mock_user):
     client = client_with_user(mock_user)
     with patch("app.routers.ingestion.ingestion_pipeline") as mock_pipeline:
-        mock_pipeline.return_value = (5, "pdf", 10, [], [])
+        mock_pipeline.return_value = (5, "pdf", 10, 0, [], [])
         files = {"file": ("test.pdf", b"%PDF-1.4\nfake pdf content")}
         response = client.post("/ingest", files=files)
         assert response.status_code == 200
