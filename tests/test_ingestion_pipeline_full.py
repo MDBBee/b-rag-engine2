@@ -35,10 +35,11 @@ async def test_ingestion_pipeline_success():
             user_id="user-123"
         )
         
-        chunk_count, doc_type, page_count, chunks, summarized = result
+        chunk_count, doc_type, page_count, first_chunk_index, chunks, summarized = result
         assert chunk_count == 1
         assert doc_type == "txt"
         assert page_count == 0
+        assert first_chunk_index == 0
         assert len(chunks) == 1
         assert len(summarized) == 1
         mock_create_project.assert_called_once_with(
@@ -88,7 +89,7 @@ async def test_ingestion_pipeline_append():
             user_id="user-123"
         )
         
-        chunk_count, doc_type, page_count, chunks, summarized = result
+        chunk_count, doc_type, page_count, first_chunk_index, chunks, summarized = result
         assert chunk_count == 1
         
         # Verify chunk index starts from existing count
@@ -146,7 +147,7 @@ async def test_ingestion_pipeline_pdf_detection():
             user_id="user-123"
         )
         
-        _, doc_type, page_count, _, _ = result
+        _, doc_type, page_count, first_chunk_index, _, _ = result
         assert doc_type == "pdf"
         assert page_count == 5
 

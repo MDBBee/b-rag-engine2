@@ -48,7 +48,7 @@ async def ingest(
         collection_name = filename_to_collection_name(file.filename)
 
     try:
-        chunk_count, document_type, no_of_pages, chunks, summarized_chunks = await ingestion_pipeline(
+        chunk_count, document_type, no_of_pages, first_chunk_index, chunks, summarized_chunks = await ingestion_pipeline(
             tmp_path, file.filename, collection_name, user.id,
             project_name=project_name,
             chunk_size=chunk_size,
@@ -60,6 +60,8 @@ async def ingest(
             chunk_count=chunk_count,
             document_type=document_type,
             no_of_pages=no_of_pages,
+            first_chunk_index=first_chunk_index,
+            last_chunk_index=first_chunk_index + chunk_count - 1 if chunk_count > 0 else first_chunk_index,
             chunks=chunks,
             summarized_chunks=summarized_chunks,
         )

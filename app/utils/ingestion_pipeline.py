@@ -148,16 +148,19 @@ async def ingestion_pipeline(
         transcript_text: Raw text to ingest directly (skips file extraction)
     
     Returns:
-        tuple: (chunk_count, document_type, no_of_pages, chunks, summarized_chunks)
+        tuple: (chunk_count, document_type, no_of_pages, first_chunk_index, chunks, summarized_chunks)
     """
     # Get existing chunk count for this collection
     existing_count = await mongodb.vectors.count_documents(
         {"user_id": user_id, "collection_name": collection_name}
     )
 
-    document_type = detect_document_type(file_path)
-    
-    page_texts = await extract_text_by_page(file_path)
+    if transcript_text:
+        document_type = "txt"
+        page_texts = [{"text": transcript_text, "page_number": None}]
+    else:
+        document_type = detect_document_type(file_path)
+        page_texts = await extract_text_by_page(file_path)
     no_of_pages = len([p for p in page_texts if p["page_number"] is not None])
 
     resolved_chunk_size = chunk_size if chunk_size is not None else settings.chunk_size
@@ -300,4 +303,4 @@ async def ingestion_pipeline(
         for i, chunk in enumerate(final_chunks)
     ]
 
-    return len(docs_to_insert), document_type, no_of_pages, chunks, summarized_chunks
+    return len(docs_to_insert), document_type, no_of_pages, existing_count, chunks, summarized_chunks

@@ -50,10 +50,10 @@ async def ingest_youtube(
     full_text = transcript_result["full_text"]
     language = transcript_result.get("language", "unknown")
     collection_name = request.collection_name or video_id_to_collection_name(video_id)
-    filename = f"youtube_{video_id}.txt"
+    filename = request.file_name or f"youtube_{video_id}.txt"
 
     try:
-        chunk_count, document_type, no_of_pages, chunks, summarized_chunks = await ingestion_pipeline(
+        chunk_count, document_type, no_of_pages, first_chunk_index, chunks, summarized_chunks = await ingestion_pipeline(
             file_path=None,
             filename=filename,
             collection_name=collection_name,
@@ -70,6 +70,8 @@ async def ingest_youtube(
             chunk_count=chunk_count,
             document_type=document_type,
             no_of_pages=no_of_pages,
+            first_chunk_index=first_chunk_index,
+            last_chunk_index=first_chunk_index + chunk_count - 1 if chunk_count > 0 else first_chunk_index,
             chunks=chunks,
             summarized_chunks=summarized_chunks,
         )

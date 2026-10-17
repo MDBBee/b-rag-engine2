@@ -21,6 +21,7 @@ def _mock_ingestion_result():
         3,
         "youtube",
         0,
+        0,
         [ChunkData(text="chunk text", types=["text"])],
         [SummarizedChunk(page_content="chunk text", metadata={})],
     )
