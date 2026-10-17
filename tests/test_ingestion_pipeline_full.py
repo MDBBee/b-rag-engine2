@@ -6,13 +6,14 @@ from app.utils.ingestion_pipeline import ingestion_pipeline
 
 
 async def test_ingestion_pipeline_success():
-    with patch("app.utils.ingestion_pipeline.check_collection_exists") as mock_check, \
+    with patch("app.utils.ingestion_pipeline.mongodb") as mock_mongodb, \
          patch("app.utils.ingestion_pipeline.create_project") as mock_create_project, \
          patch("app.utils.ingestion_pipeline.MarkItDown") as mock_markitdown, \
-         patch("app.utils.ingestion_pipeline.get_splitter") as mock_splitter, \
-         patch("app.utils.ingestion_pipeline.mongodb") as mock_mongodb:
+         patch("app.utils.ingestion_pipeline.get_splitter") as mock_splitter:
         
-        mock_check.return_value = False
+        mock_mongodb.vectors.count_documents = AsyncMock(return_value=0)
+        mock_mongodb.projects.find_one = AsyncMock(return_value=None)
+        
         mock_md_instance = MagicMock()
         mock_md_instance.convert.return_value.text_content = "Test content here"
         mock_markitdown.return_value = mock_md_instance
@@ -50,27 +51,69 @@ async def test_ingestion_pipeline_success():
         )
 
 
-async def test_ingestion_pipeline_collection_exists():
-    with patch("app.utils.ingestion_pipeline.check_collection_exists") as mock_check:
-        mock_check.return_value = True
-        with pytest.raises(ValueError, match="already exists"):
-            await ingestion_pipeline(
-                file_path="test.txt",
-                filename="test.txt",
-                collection_name="existing-collection",
-                user_id="user-123"
-            )
+async def test_ingestion_pipeline_append():
+    """Test that appending to existing collection updates chunk indices and project."""
+    with patch("app.utils.ingestion_pipeline.mongodb") as mock_mongodb, \
+         patch("app.utils.ingestion_pipeline.MarkItDown") as mock_markitdown, \
+         patch("app.utils.ingestion_pipeline.get_splitter") as mock_splitter:
+        
+        # Simulate existing collection with 5 chunks
+        mock_mongodb.vectors.count_documents = AsyncMock(return_value=5)
+        mock_mongodb.projects.find_one = AsyncMock(return_value={
+            "user_id": "user-123",
+            "collection_name": "test-collection",
+            "file_name": "chapter1.txt",
+            "chunk_count": 5,
+        })
+        mock_mongodb.projects.update_one = AsyncMock()
+        
+        mock_md_instance = MagicMock()
+        mock_md_instance.convert.return_value.text_content = "Chapter 2 content"
+        mock_markitdown.return_value = mock_md_instance
+        
+        mock_chunk = MagicMock()
+        mock_chunk.page_content = "New chunk"
+        mock_chunk.metadata = {}
+        mock_splitter_instance = MagicMock()
+        mock_splitter_instance.split_text.return_value = [mock_chunk]
+        mock_splitter.return_value = mock_splitter_instance
+        
+        mock_mongodb.embeddings.embed_documents.return_value = [[0.1, 0.2, 0.3]]
+        mock_mongodb.vectors.insert_many = AsyncMock()
+        
+        result = await ingestion_pipeline(
+            file_path="chapter2.txt",
+            filename="chapter2.txt",
+            collection_name="test-collection",
+            user_id="user-123"
+        )
+        
+        chunk_count, doc_type, page_count, chunks, summarized = result
+        assert chunk_count == 1
+        
+        # Verify chunk index starts from existing count
+        assert mock_chunk.metadata["chunk_index"] == 5
+        assert mock_chunk.metadata["total_chunks"] == 6
+        
+        # Verify project was updated (not created)
+        mock_mongodb.projects.update_one.assert_called_once()
+        update_filter, update_ops = mock_mongodb.projects.update_one.call_args[0]
+        assert update_filter == {"user_id": "user-123", "collection_name": "test-collection"}
+        assert update_ops["$set"]["chunk_count"] == 6
+        assert "chapter1.txt" in update_ops["$set"]["file_name"]
+        assert "chapter2.txt" in update_ops["$set"]["file_name"]
 
 
 async def test_ingestion_pipeline_pdf_detection():
-    with patch("app.utils.ingestion_pipeline.check_collection_exists") as mock_check, \
+    with patch("app.utils.ingestion_pipeline.mongodb") as mock_mongodb, \
          patch("app.utils.ingestion_pipeline.create_project"), \
          patch("app.utils.ingestion_pipeline.MarkItDown") as mock_markitdown, \
          patch("app.utils.ingestion_pipeline.get_splitter") as mock_splitter, \
-         patch("app.utils.ingestion_pipeline.mongodb") as mock_mongodb, \
          patch("app.utils.ingestion_pipeline.pymupdf") as mock_pymupdf:
         
-        mock_check.return_value = False
+        mock_mongodb.vectors.count_documents = AsyncMock(return_value=0)
+        mock_mongodb.projects.find_one = AsyncMock(return_value=None)
+        
         mock_md_instance = MagicMock()
         mock_md_instance.convert.return_value.text_content = "PDF content"
         mock_markitdown.return_value = mock_md_instance
@@ -109,13 +152,14 @@ async def test_ingestion_pipeline_pdf_detection():
 
 
 async def test_ingestion_pipeline_metadata_enrichment():
-    with patch("app.utils.ingestion_pipeline.check_collection_exists") as mock_check, \
+    with patch("app.utils.ingestion_pipeline.mongodb") as mock_mongodb, \
          patch("app.utils.ingestion_pipeline.create_project"), \
          patch("app.utils.ingestion_pipeline.MarkItDown") as mock_markitdown, \
-         patch("app.utils.ingestion_pipeline.get_splitter") as mock_splitter, \
-         patch("app.utils.ingestion_pipeline.mongodb") as mock_mongodb:
+         patch("app.utils.ingestion_pipeline.get_splitter") as mock_splitter:
         
-        mock_check.return_value = False
+        mock_mongodb.vectors.count_documents = AsyncMock(return_value=0)
+        mock_mongodb.projects.find_one = AsyncMock(return_value=None)
+        
         mock_md_instance = MagicMock()
         mock_md_instance.convert.return_value.text_content = "Content"
         mock_markitdown.return_value = mock_md_instance

@@ -14,7 +14,7 @@ from markitdown import MarkItDown
 from app.config import settings
 from app.typing.schemas import ChunkData, SummarizedChunk
 from app.utils import mongodb
-from app.utils.mongodb import check_collection_exists, create_project
+from app.utils.mongodb import create_project
 from app.utils.text_splitters import get_splitter
 
 logger = logging.getLogger(__name__)
@@ -150,8 +150,10 @@ async def ingestion_pipeline(
     Returns:
         tuple: (chunk_count, document_type, no_of_pages, chunks, summarized_chunks)
     """
-    if await check_collection_exists(user_id, collection_name):
-        raise ValueError(f"Collection '{collection_name}' already exists for user '{user_id}'")
+    # Get existing chunk count for this collection
+    existing_count = await mongodb.vectors.count_documents(
+        {"user_id": user_id, "collection_name": collection_name}
+    )
 
     document_type = detect_document_type(file_path)
     
@@ -208,11 +210,12 @@ async def ingestion_pipeline(
         logger.warning("Text splitter produced zero chunks for: %s", filename)
         raise HTTPException(status_code=400, detail="Document produced no content after splitting")
     
+    # Assign chunk indices starting from existing_count (for append) or 0 (for new)
     for i, chunk in enumerate(final_chunks):
         chunk.metadata.update({
             "source": filename,
-            "chunk_index": i,
-            "total_chunks": len(final_chunks),
+            "chunk_index": existing_count + i,
+            "total_chunks": existing_count + len(final_chunks),
         })
 
     texts = [chunk.page_content for chunk in final_chunks]
@@ -235,7 +238,7 @@ async def ingestion_pipeline(
         doc = {
             "user_id": user_id,
             "collection_name": collection_name,
-            "chunk_index": i,
+            "chunk_index": existing_count + i,
             "content": chunk.page_content,
             "embedding": vector,
             "metadata": chunk.metadata,
@@ -245,14 +248,35 @@ async def ingestion_pipeline(
 
     await mongodb.vectors.insert_many(docs_to_insert)
 
-    await create_project(
-        user_id=user_id,
-        name=project_name or filename,
-        collection_name=collection_name,
-        file_name=filename,
-        chunk_count=len(docs_to_insert),
-        document_type=document_type,
+    # Check if project already exists
+    existing_project = await mongodb.projects.find_one(
+        {"user_id": user_id, "collection_name": collection_name}
     )
+    
+    if existing_project:
+        # Append: update chunk_count and file_name (comma-separated)
+        existing_file_names = existing_project.get("file_name", "")
+        new_file_names = f"{existing_file_names}, {filename}" if existing_file_names else filename
+        
+        await mongodb.projects.update_one(
+            {"user_id": user_id, "collection_name": collection_name},
+            {
+                "$set": {
+                    "chunk_count": existing_count + len(docs_to_insert),
+                    "file_name": new_file_names,
+                }
+            }
+        )
+    else:
+        # Create new project
+        await create_project(
+            user_id=user_id,
+            name=project_name or filename,
+            collection_name=collection_name,
+            file_name=filename,
+            chunk_count=len(docs_to_insert),
+            document_type=document_type,
+        )
 
     chunks = [
         ChunkData(
