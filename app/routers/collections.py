@@ -57,7 +57,8 @@ async def get_collection_metadata(collection_name: str, user: UserInfo = Depends
         return {
             "collection_name": collection_name,
             "name": project_doc.get("name"),
-            "file_name": project_doc.get("file_name"),
+            "file_name": project_doc.get("file_name", []),
+            "document_type": project_doc.get("document_type", []),
             "chunk_count": project_doc.get("chunk_count", result["chunk_count"]),
             "created_at": project_doc.get("created_at"),
         }
@@ -81,6 +82,29 @@ async def get_chunks(collection_name: str, user: UserInfo = Depends(get_current_
     except Exception:
         logger.exception("Failed to fetch chunks")
         raise HTTPException(status_code=500, detail="Failed to fetch chunks")
+
+
+@router.get("/{collection_name}/documents")
+async def get_documents(collection_name: str, user: UserInfo = Depends(get_current_user)):
+    """Get all documents in a collection with metadata."""
+    try:
+        project_doc = await projects.find_one({
+            "user_id": user.id,
+            "collection_name": collection_name,
+        })
+
+        if not project_doc:
+            raise HTTPException(status_code=404, detail=f"Collection '{collection_name}' not found")
+
+        return {
+            "collection_name": collection_name,
+            "documents": project_doc.get("document_type", []),
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to get documents")
+        raise HTTPException(status_code=500, detail="Failed to get documents")
 
 
 @router.delete("/{collection_name}", response_model=CascadeDeleteResponse)

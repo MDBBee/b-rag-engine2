@@ -27,6 +27,7 @@ async def generate(request: QuizRequest, user: UserInfo = Depends(get_current_us
                 page_end=request.page_end,
                 llm_provider=request.llm_provider,
                 llm_model=request.llm_model,
+                file_scope=request.file_scope,
             ):
                 if event_type == "progress":
                     yield f"data: {json.dumps({'type': 'progress', 'message': data})}\n\n"

@@ -36,6 +36,7 @@ class ChatMessageHistory(BaseModel):
 class QueryRequest(BaseModel):
     query: str
     collection_name: str
+    file_scope: list[str] | None = Field(default=None)
     llm_provider: str | None = Field(default=None)
     llm_model: str | None = Field(default=None)
     top_k: int | None = Field(default=None)
@@ -56,10 +57,16 @@ class QueryResponse(BaseModel):
     sources: list[SourceChunk] = Field(default_factory=list)
 
 
+class DocumentInfo(BaseModel):
+    name: str
+    type: str
+
+
 class CollectionInfo(BaseModel):
     collection_name: str
     name: str | None = None
-    file_name: str | None = None
+    file_name: list[str] = Field(default_factory=list)
+    document_type: list[DocumentInfo] = Field(default_factory=list)
     chunk_count: int
     created_at: datetime
 
@@ -82,6 +89,7 @@ class CollectionChunksResponse(BaseModel):
 
 class QuizRequest(BaseModel):
     collection_name: str
+    file_scope: list[str] | None = Field(default=None)
     page_start: int | None = Field(default=None, ge=1)
     page_end: int | None = Field(default=None, ge=1)
     llm_provider: str | None = Field(default=None)

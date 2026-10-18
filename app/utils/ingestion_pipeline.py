@@ -272,8 +272,15 @@ async def ingestion_pipeline_stream(
         )
         
         if existing_project:
-            existing_file_names = existing_project.get("file_name", "")
-            new_file_names = f"{existing_file_names}, {filename}" if existing_file_names else filename
+            existing_file_names = existing_project.get("file_name", [])
+            existing_doc_types = existing_project.get("document_type", [])
+            
+            if filename not in existing_file_names:
+                new_file_names = existing_file_names + [filename]
+                new_doc_types = existing_doc_types + [{"name": filename, "type": document_type}]
+            else:
+                new_file_names = existing_file_names
+                new_doc_types = existing_doc_types
             
             await mongodb.projects.update_one(
                 {"user_id": user_id, "collection_name": collection_name},
@@ -281,6 +288,7 @@ async def ingestion_pipeline_stream(
                     "$set": {
                         "chunk_count": existing_count + len(docs_to_insert),
                         "file_name": new_file_names,
+                        "document_type": new_doc_types,
                     }
                 }
             )
@@ -289,9 +297,9 @@ async def ingestion_pipeline_stream(
                 user_id=user_id,
                 name=project_name or filename,
                 collection_name=collection_name,
-                file_name=filename,
+                file_name=[filename],
                 chunk_count=len(docs_to_insert),
-                document_type=document_type,
+                document_type=[{"name": filename, "type": document_type}],
             )
 
         yield ("progress", {"percent": 100, "stage": "vectorize"})

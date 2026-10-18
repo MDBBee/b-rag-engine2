@@ -22,6 +22,7 @@ async def generate_quiz(
     page_end: int | None = None,
     llm_provider: str | None = None,
     llm_model: str | None = None,
+    file_scope: list[str] | None = None,
 ) -> AsyncGenerator[tuple[str, dict | str | None], None]:
     """Generate quiz questions from document chunks.
 
@@ -33,9 +34,11 @@ async def generate_quiz(
     """
     yield ("progress", "Fetching document chunks...")
 
-    cursor = mongodb.vectors.find(
-        {"user_id": user_id, "collection_name": collection_name}
-    ).sort("chunk_index", 1)
+    filter_query = {"user_id": user_id, "collection_name": collection_name}
+    if file_scope:
+        filter_query["metadata.source"] = {"$in": file_scope}
+
+    cursor = mongodb.vectors.find(filter_query).sort("chunk_index", 1)
 
     all_chunks = []
     async for doc in cursor:

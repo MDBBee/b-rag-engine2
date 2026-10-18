@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 #   Avoids expensive aggregations on the vectors collection.
 # ---------------------------------------------------------------------------
 
+class DocumentInfo(TypedDict):
+    """Schema for document metadata."""
+    name: str
+    type: str
+
 class VectorDocument(TypedDict):
     """Schema for documents in the 'vectors' collection."""
     user_id: str
@@ -42,9 +47,9 @@ class ProjectDocument(TypedDict):
     user_id: str
     name: str
     collection_name: str
-    file_name: str
+    file_name: list[str]
+    document_type: list[DocumentInfo]
     chunk_count: int
-    document_type: str
     created_at: datetime
 
 # ---------------------------------------------------------------------------
@@ -127,6 +132,9 @@ async def ensure_indexes():
     """Create indexes for vectors and projects collections."""
     # Compound index on vectors: speeds up chunk listing and deletion
     await vectors.create_index([("user_id", 1), ("collection_name", 1)])
+    
+    # Index on metadata.source: speeds up file-scoped queries
+    await vectors.create_index([("metadata.source", 1)])
 
     # Unique index on projects: prevents duplicate project entries
     await projects.create_index(
@@ -188,9 +196,9 @@ async def create_project(
     user_id: str,
     name: str,
     collection_name: str,
-    file_name: str,
+    file_name: list[str],
     chunk_count: int,
-    document_type: str,
+    document_type: list[DocumentInfo],
 ) -> None:
     """Register a project in the projects collection."""
     await projects.insert_one({
@@ -212,7 +220,8 @@ async def list_collections(user_id: str) -> list[dict]:
         results.append({
             "collection_name": doc["collection_name"],
             "name": doc.get("name"),
-            "file_name": doc.get("file_name"),
+            "file_name": doc.get("file_name", []),
+            "document_type": doc.get("document_type", []),
             "chunk_count": doc["chunk_count"],
             "created_at": doc["created_at"],
         })

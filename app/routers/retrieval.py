@@ -40,6 +40,7 @@ async def query_stream(request: QueryRequest, user: UserInfo = Depends(get_curre
                 max_retries=request.max_retries,
                 llm_provider=request.llm_provider,
                 llm_model=request.llm_model,
+                file_scope=request.file_scope,
             ):
                 if event_type == "node_start":
                     fe_type, message = NODE_EVENT_MAP.get(data, (None, None))

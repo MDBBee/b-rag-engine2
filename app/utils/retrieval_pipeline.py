@@ -50,6 +50,7 @@ class RAGState(TypedDict):
     top_k: int
     retry_count: int
     max_retries: int
+    file_scope: list[str] | None
 
 
 async def classify_intent(state: RAGState) -> dict:
@@ -92,10 +93,13 @@ async def retrieve_all(state: RAGState) -> dict:
     collection_name = state.get("collection_name", "default")
     user_id = state.get("user_id", "")
     max_chunks = settings.max_context_chunks
+    file_scope = state.get("file_scope")
 
-    cursor = mongodb.vectors.find(
-        {"user_id": user_id, "collection_name": collection_name}
-    ).sort("chunk_index", 1).limit(max_chunks)
+    filter_query = {"user_id": user_id, "collection_name": collection_name}
+    if file_scope:
+        filter_query["metadata.source"] = {"$in": file_scope}
+
+    cursor = mongodb.vectors.find(filter_query).sort("chunk_index", 1).limit(max_chunks)
 
     docs = []
     async for doc in cursor:
@@ -120,8 +124,12 @@ async def retrieve_top_k(state: RAGState) -> dict:
     user_id = state.get("user_id", "")
     collection_name = state.get("collection_name", "default")
     top_k = state.get("top_k", settings.top_k)
+    file_scope = state.get("file_scope")
 
     pre_filter = {"user_id": user_id, "collection_name": collection_name}
+    if file_scope:
+        pre_filter["metadata.source"] = {"$in": file_scope}
+
     docs = await mongodb.vectorstore.asimilarity_search(query, k=top_k, pre_filter=pre_filter)
 
     if not docs:
@@ -277,6 +285,7 @@ async def retrieval_pipeline(
     max_retries: int | None = None,
     llm_provider: str | None = None,
     llm_model: str | None = None,
+    file_scope: list[str] | None = None,
 ) -> AsyncGenerator[tuple[str, str | list[dict]], None]:
     """Stream RAG response with conversation history from frontend."""
     all_messages = [m.model_dump() for m in messages] + [{"role": "user", "content": query}]
@@ -305,6 +314,7 @@ async def retrieval_pipeline(
         "file_name": file_name or "",
         "llm": llm,
         "top_k": top_k or settings.top_k,
+        "file_scope": file_scope,
     }
 
     sources_yielded = False
