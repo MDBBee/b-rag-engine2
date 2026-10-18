@@ -1,15 +1,16 @@
+import json
 import logging
 import re
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi.responses import StreamingResponse
 
 from app.config import settings
 from app.middleware.auth import UserInfo, get_current_user
-from app.typing.schemas import IngestResponse
 from app.utils.file_validation import save_temp_with_limit
-from app.utils.ingestion_pipeline import ingestion_pipeline
+from app.utils.ingestion_pipeline import ingestion_pipeline_stream
 
 logger = logging.getLogger(__name__)
 
@@ -32,49 +33,45 @@ def filename_to_collection_name(filename: str) -> str:
     return name[:MAX_COLLECTION_NAME_LENGTH]
 
 
-@router.post("", response_model=IngestResponse)
-async def ingest(
+@router.post("")
+async def ingest_stream(
     file: UploadFile = File(...),
     collection_name: str | None = Form(None),
     project_name: str | None = Form(None),
     chunk_size: int | None = Form(None),
     chunk_overlap: int | None = Form(None),
     text_splitter: str | None = Form(None),
+    force_reprocess: bool = Form(False),
     user: UserInfo = Depends(get_current_user),
 ):
+    """Streaming ingestion endpoint. Returns SSE events with progress updates."""
     tmp_path = await save_temp_with_limit(file, settings.max_ingest_file_size)
 
     if not collection_name:
         collection_name = filename_to_collection_name(file.filename)
 
-    try:
-        chunk_count, document_type, no_of_pages, first_chunk_index, chunks, summarized_chunks = await ingestion_pipeline(
-            tmp_path, file.filename, collection_name, user.id,
-            project_name=project_name,
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            text_splitter=text_splitter,
-        )
-        return IngestResponse(
-            status="ok",
-            chunk_count=chunk_count,
-            document_type=document_type,
-            no_of_pages=no_of_pages,
-            first_chunk_index=first_chunk_index,
-            last_chunk_index=first_chunk_index + chunk_count - 1 if chunk_count > 0 else first_chunk_index,
-            chunks=chunks,
-            summarized_chunks=summarized_chunks,
-        )
-    except ValueError as e:
-        logger.warning("Collection uniqueness violation: %s", e)
-        raise HTTPException(status_code=409, detail=str(e))
-    except TimeoutError:
-        logger.error("Ingestion timed out")
-        raise HTTPException(status_code=504, detail="Ingestion timed out. Please try again.")
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception("Ingestion failed")
-        raise HTTPException(status_code=500, detail="Ingestion failed. Please try again.")
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
+    async def event_generator():
+        try:
+            if force_reprocess:
+                from app.utils import mongodb
+                await mongodb.delete_vectors_by_source(user.id, collection_name, file.filename)
+
+            async for event_type, data in ingestion_pipeline_stream(
+                file_path=tmp_path,
+                filename=file.filename,
+                collection_name=collection_name,
+                user_id=user.id,
+                project_name=project_name,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                text_splitter=text_splitter,
+            ):
+                payload = json.dumps({"type": event_type, **data})
+                yield f"data: {payload}\n\n"
+        except Exception:
+            logger.exception("Ingestion stream failed")
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Ingestion failed'})}\n\n"
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

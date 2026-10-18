@@ -1,12 +1,13 @@
+import json
 import logging
 import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 
 from app.middleware.auth import UserInfo, get_current_user
-from app.typing.schemas import IngestResponse
-from app.utils.ingestion_pipeline import ingestion_pipeline
+from app.utils.ingestion_pipeline import ingestion_pipeline_stream
 from app.utils.transcript_fetcher import fetch_transcript_with_retry, raise_for_transcript_error
 from app.utils.youtube_utils import YouTubeURLRequest, extract_video_id
 
@@ -31,15 +32,12 @@ def video_id_to_collection_name(video_id: str) -> str:
     return name[:MAX_COLLECTION_NAME_LENGTH]
 
 
-@router.post("/youtube", response_model=IngestResponse)
-async def ingest_youtube(
+@router.post("/youtube")
+async def ingest_youtube_stream(
     request: YouTubeURLRequest,
     user: UserInfo = Depends(get_current_user),
 ):
-    """Ingest a YouTube video transcript into the RAG pipeline.
-
-    Fetches the transcript, chunks it, embeds, and stores in MongoDB.
-    """
+    """Streaming YouTube ingestion endpoint. Returns SSE events with progress updates."""
     video_id = extract_video_id(request.url)
     if not video_id:
         raise HTTPException(status_code=400, detail="Could not extract video ID from URL")
@@ -52,34 +50,21 @@ async def ingest_youtube(
     collection_name = request.collection_name or video_id_to_collection_name(video_id)
     filename = request.file_name or f"youtube_{video_id}.txt"
 
-    try:
-        chunk_count, document_type, no_of_pages, first_chunk_index, chunks, summarized_chunks = await ingestion_pipeline(
-            file_path=None,
-            filename=filename,
-            collection_name=collection_name,
-            user_id=user.id,
-            project_name=f"YouTube: {video_id}",
-            transcript_text=full_text,
-        )
-        logger.info(
-            "YouTube ingestion complete: video=%s lang=%s chunks=%d",
-            video_id, language, chunk_count,
-        )
-        return IngestResponse(
-            status="ok",
-            chunk_count=chunk_count,
-            document_type=document_type,
-            no_of_pages=no_of_pages,
-            first_chunk_index=first_chunk_index,
-            last_chunk_index=first_chunk_index + chunk_count - 1 if chunk_count > 0 else first_chunk_index,
-            chunks=chunks,
-            summarized_chunks=summarized_chunks,
-        )
-    except ValueError as e:
-        logger.warning("Collection uniqueness violation: %s", e)
-        raise HTTPException(status_code=409, detail=str(e))
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception("YouTube ingestion failed for %s", video_id)
-        raise HTTPException(status_code=500, detail="Ingestion failed. Please try again.")
+    async def event_generator():
+        try:
+            async for event_type, data in ingestion_pipeline_stream(
+                file_path=None,
+                filename=filename,
+                collection_name=collection_name,
+                user_id=user.id,
+                project_name=f"YouTube: {video_id}",
+                transcript_text=full_text,
+            ):
+                payload = json.dumps({"type": event_type, **data})
+                yield f"data: {payload}\n\n"
+        except Exception:
+            logger.exception("YouTube ingestion stream failed for %s", video_id)
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Ingestion failed'})}\n\n"
+
+    logger.info("YouTube ingestion streaming: video=%s lang=%s", video_id, language)
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

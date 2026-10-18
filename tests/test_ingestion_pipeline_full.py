@@ -1,7 +1,5 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from app.utils.ingestion_pipeline import ingestion_pipeline
 
 
@@ -89,7 +87,7 @@ async def test_ingestion_pipeline_append():
             user_id="user-123"
         )
         
-        chunk_count, doc_type, page_count, first_chunk_index, chunks, summarized = result
+        chunk_count, *_ = result
         assert chunk_count == 1
         
         # Verify chunk index starts from existing count
@@ -147,7 +145,7 @@ async def test_ingestion_pipeline_pdf_detection():
             user_id="user-123"
         )
         
-        _, doc_type, page_count, first_chunk_index, _, _ = result
+        _, doc_type, page_count, _, _, _ = result
         assert doc_type == "pdf"
         assert page_count == 5
 
