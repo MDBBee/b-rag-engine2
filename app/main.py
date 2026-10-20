@@ -1,4 +1,5 @@
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -7,7 +8,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.routers import collections, file_processing, ingestion, quiz, retrieval, youtube_ingest
+from app.routers import (
+    collections,
+    file_processing,
+    ingestion,
+    quiz,
+    retrieval,
+    summaries,
+    youtube_ingest,
+)
 from app.utils.mongodb import close_mongodb, init_mongodb
 from app.utils.retrieval_pipeline import init_graph
 
@@ -40,6 +49,15 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def log_request_time(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - start) * 1000
+    logger.info("%s %s → %d (%.0fms)", request.method, request.url.path, response.status_code, duration_ms)
+    return response
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     logger.warning(f"HTTP {exc.status_code} {request.method} {request.url.path}: {exc.detail}")
@@ -51,6 +69,7 @@ app.include_router(retrieval.router)
 app.include_router(collections.router)
 app.include_router(file_processing.router)
 app.include_router(quiz.router)
+app.include_router(summaries.router)
 
 
 @app.get("/health")

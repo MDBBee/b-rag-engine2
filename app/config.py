@@ -11,7 +11,16 @@ class Settings(BaseSettings):
 
     openrouter_api_key: str = ""
     embedding_model: str = "text-embedding-3-small"
+    allowed_embedding_models: list[str] = [
+        "text-embedding-3-small",
+        "qwen/qwen3-embedding-8b",
+    ]
     llm_model: str = "openai/gpt-4o-mini"
+    allowed_models: list[str] = [
+        "openai/gpt-4o-mini",
+        "qwen/qwen3.7-flash",
+        "nvidia/nemotron-3.5-super-vl:free",
+    ]
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     mongodb_uri: str = ""
     mongodb_database: str = "b-rag"

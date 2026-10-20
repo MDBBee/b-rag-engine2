@@ -60,6 +60,7 @@ client: AsyncIOMotorClient | None = None
 db = None
 vectors = None
 projects = None
+summaries = None
 sync_client: MongoClient | None = None
 sync_db = None
 llm: ChatOpenAI | None = None
@@ -68,9 +69,48 @@ vectorstore: MongoDBAtlasVectorSearch | None = None
 
 VECTORS_COLLECTION = "vectors"
 PROJECTS_COLLECTION = "projects"
+SUMMARIES_COLLECTION = "summaries"
 VECTOR_INDEX_NAME = "vector_index"
 
 _llm_cache: dict[str, ChatOllama] = {}
+_openrouter_llm_cache: dict[str, ChatOpenAI] = {}
+_embeddings_cache: dict[str, OpenAIEmbeddings] = {}
+_vectorstore_cache: dict[str, MongoDBAtlasVectorSearch] = {}
+
+
+def get_embeddings(model: str | None = None) -> OpenAIEmbeddings:
+    """Get or create a cached embeddings instance for the specified model."""
+    model_name = model or settings.embedding_model
+    
+    if model_name not in settings.allowed_embedding_models:
+        raise ValueError(f"Model '{model_name}' not in allowed embedding models: {settings.allowed_embedding_models}")
+    
+    if model_name not in _embeddings_cache:
+        _embeddings_cache[model_name] = OpenAIEmbeddings(
+            model=model_name,
+            dimensions=1536,  # All models use 1536 dimensions for compatibility
+            openai_api_key=settings.openrouter_api_key,
+            openai_api_base=settings.openrouter_base_url,
+        )
+    
+    return _embeddings_cache[model_name]
+
+
+def get_vectorstore(model: str | None = None) -> MongoDBAtlasVectorSearch:
+    """Get or create a cached vectorstore instance for the specified model."""
+    model_name = model or settings.embedding_model
+    
+    if model_name not in _vectorstore_cache:
+        embeddings = get_embeddings(model_name)
+        _vectorstore_cache[model_name] = MongoDBAtlasVectorSearch(
+            collection=sync_db[VECTORS_COLLECTION],
+            embedding=embeddings,
+            index_name=VECTOR_INDEX_NAME,
+            text_key="content",
+            embedding_key="embedding",
+        )
+    
+    return _vectorstore_cache[model_name]
 
 
 def get_llm(model: str) -> ChatOllama:
@@ -89,37 +129,45 @@ def get_llm(model: str) -> ChatOllama:
     return _llm_cache[cache_key]
 
 
+def get_openrouter_llm(model: str) -> ChatOpenAI:
+    """Get or create a cached OpenRouter LLM instance."""
+    if model not in settings.allowed_models:
+        raise ValueError(f"Model '{model}' not in allowed models: {settings.allowed_models}")
+    
+    cache_key = f"openrouter:{model}"
+
+    if cache_key not in _openrouter_llm_cache:
+        _openrouter_llm_cache[cache_key] = ChatOpenAI(
+            model=model,
+            openai_api_key=settings.openrouter_api_key,
+            openai_api_base=settings.openrouter_base_url,
+            temperature=0,
+        )
+
+    return _openrouter_llm_cache[cache_key]
+
+
 async def init_mongodb():
     """Initialize MongoDB clients, LLM/embeddings, and vectorstore."""
-    global client, db, vectors, projects, sync_client, sync_db, llm, embeddings, vectorstore
+    global client, db, vectors, projects, summaries, sync_client, sync_db, llm, embeddings, vectorstore
     try:
         client = AsyncIOMotorClient(settings.mongodb_uri)
         db = client[settings.mongodb_database]
         vectors = db[VECTORS_COLLECTION]
         projects = db[PROJECTS_COLLECTION]
+        summaries = db[SUMMARIES_COLLECTION]
 
         sync_client = MongoClient(settings.mongodb_uri)
         sync_db = sync_client[settings.mongodb_database]
 
-        embeddings = OpenAIEmbeddings(
-            model="text-embedding-3-small",
-            openai_api_key=settings.openrouter_api_key,
-            openai_api_base=settings.openrouter_base_url,
-        )
+        embeddings = get_embeddings()
+        vectorstore = get_vectorstore()
 
         llm = ChatOpenAI(
             model=settings.llm_model,
             openai_api_key=settings.openrouter_api_key,
             openai_api_base=settings.openrouter_base_url,
             temperature=0,
-        )
-
-        vectorstore = MongoDBAtlasVectorSearch(
-            collection=sync_db[VECTORS_COLLECTION],
-            embedding=embeddings,
-            index_name=VECTOR_INDEX_NAME,
-            text_key="content",
-            embedding_key="embedding",
         )
 
         await ensure_indexes()
@@ -142,11 +190,19 @@ async def ensure_indexes():
         unique=True,
     )
 
+    # Index on summaries: speeds up listing by project
+    await summaries.create_index([("user_id", 1), ("collection_name", 1), ("created_at", -1)])
+
     # Vector search index on vectors collection
     existing_indexes = await vectors.list_search_indexes().to_list()
     index_names = [idx["name"] for idx in existing_indexes]
 
-    if VECTOR_INDEX_NAME not in index_names:
+    # Drop existing index to recreate with metadata.source filter
+    if VECTOR_INDEX_NAME in index_names:
+        logger.info("Dropping existing vector search index to add metadata.source filter")
+        await vectors.drop_search_index(VECTOR_INDEX_NAME)
+
+    if VECTOR_INDEX_NAME not in index_names:  # Recreate if missing
         search_index_model = SearchIndexModel(
             definition={
                 "fields": [
@@ -158,6 +214,7 @@ async def ensure_indexes():
                     },
                     {"type": "filter", "path": "user_id"},
                     {"type": "filter", "path": "collection_name"},
+                    {"type": "filter", "path": "metadata.source"},
                 ]
             },
             name=VECTOR_INDEX_NAME,
@@ -168,13 +225,14 @@ async def ensure_indexes():
 
 async def close_mongodb():
     """Close MongoDB client connections."""
-    global client, db, vectors, projects, sync_client, sync_db, llm, embeddings, vectorstore
+    global client, db, vectors, projects, summaries, sync_client, sync_db, llm, embeddings, vectorstore
     if client:
         client.close()
         client = None
         db = None
         vectors = None
         projects = None
+        summaries = None
     if sync_client:
         sync_client.close()
         sync_client = None
@@ -298,3 +356,75 @@ async def update_project_metadata(user_id: str, collection_name: str, name: str 
         {"$set": update_data},
     )
     return result.modified_count > 0
+
+
+# ---------------------------------------------------------------------------
+# Summaries CRUD
+# ---------------------------------------------------------------------------
+
+
+async def save_summary(
+    user_id: str,
+    collection_name: str,
+    markdown_text: str,
+    title: str,
+) -> str:
+    """Save a summary to MongoDB. Returns the summary ID."""
+    doc = {
+        "user_id": user_id,
+        "collection_name": collection_name,
+        "summary_markdown": markdown_text,
+        "title": title,
+        "created_at": datetime.now(UTC),
+    }
+    result = await summaries.insert_one(doc)
+    return str(result.inserted_id)
+
+
+async def get_summaries(user_id: str, collection_name: str) -> list[dict]:
+    """Get all summaries for a project, sorted newest first."""
+    cursor = summaries.find(
+        {"user_id": user_id, "collection_name": collection_name}
+    ).sort("created_at", -1)
+
+    results = []
+    async for doc in cursor:
+        results.append({
+            "id": str(doc["_id"]),
+            "collection_name": doc["collection_name"],
+            "title": doc["title"],
+            "summary_markdown": doc["summary_markdown"],
+            "created_at": doc["created_at"],
+        })
+    return results
+
+
+async def get_summary(user_id: str, summary_id: str) -> dict | None:
+    """Get a single summary by ID."""
+    from bson import ObjectId
+
+    doc = await summaries.find_one({
+        "user_id": user_id,
+        "_id": ObjectId(summary_id),
+    })
+    if not doc:
+        return None
+
+    return {
+        "id": str(doc["_id"]),
+        "collection_name": doc["collection_name"],
+        "title": doc["title"],
+        "summary_markdown": doc["summary_markdown"],
+        "created_at": doc["created_at"],
+    }
+
+
+async def delete_summary(user_id: str, summary_id: str) -> bool:
+    """Delete a summary. Returns True if deleted."""
+    from bson import ObjectId
+
+    result = await summaries.delete_one({
+        "user_id": user_id,
+        "_id": ObjectId(summary_id),
+    })
+    return result.deleted_count > 0

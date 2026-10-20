@@ -44,6 +44,7 @@ class QueryRequest(BaseModel):
     project_name: str | None = Field(default=None)
     file_name: str | None = Field(default=None)
     max_retries: int | None = Field(default=None, ge=0, le=3)
+    embedding_model: str | None = Field(default=None)
 
 
 class SourceChunk(BaseModel):
@@ -90,8 +91,6 @@ class CollectionChunksResponse(BaseModel):
 class QuizRequest(BaseModel):
     collection_name: str
     file_scope: list[str] | None = Field(default=None)
-    page_start: int | None = Field(default=None, ge=1)
-    page_end: int | None = Field(default=None, ge=1)
     llm_provider: str | None = Field(default=None)
     llm_model: str | None = Field(default=None)
 
@@ -105,5 +104,44 @@ class QuizQuestion(BaseModel):
     correct_answer: Literal["A", "B", "C", "D"]
 
 
+class RewordRequest(BaseModel):
+    questions: list[QuizQuestion]
+
+
+class QuizExplainRequest(BaseModel):
+    question: str
+    option_a: str
+    option_b: str
+    option_c: str
+    option_d: str
+    collection_name: str
+    llm_provider: str | None = Field(default=None)
+    llm_model: str | None = Field(default=None)
+    top_k: int | None = Field(default=None)
+    messages: list[ChatMessageHistory] = Field(default_factory=list)
+
+
 class CollectionUpdateRequest(BaseModel):
     name: str | None = None
+
+
+class SummaryExportRequest(BaseModel):
+    """Request to export a summary as PDF or Markdown."""
+    markdown_text: str = Field(..., min_length=1)
+    title: str = Field(default="Summary", max_length=200)
+
+
+class SummarySaveRequest(BaseModel):
+    """Request to save a summary to MongoDB."""
+    collection_name: str
+    markdown_text: str = Field(..., min_length=1)
+    title: str | None = Field(default=None, max_length=200)
+
+
+class SummaryResponse(BaseModel):
+    """Response model for a saved summary."""
+    id: str
+    collection_name: str
+    title: str
+    summary_markdown: str
+    created_at: datetime

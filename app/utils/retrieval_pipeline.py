@@ -1,3 +1,4 @@
+import logging
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from typing import Annotated, Literal, TypedDict
@@ -10,6 +11,8 @@ from pydantic import BaseModel, Field
 from app.config import settings
 from app.typing.schemas import ChatMessageHistory
 from app.utils import mongodb
+
+logger = logging.getLogger(__name__)
 
 compiled_graph = None
 cached_rephrase_enabled = None
@@ -51,6 +54,7 @@ class RAGState(TypedDict):
     retry_count: int
     max_retries: int
     file_scope: list[str] | None
+    embedding_model: str | None
 
 
 async def classify_intent(state: RAGState) -> dict:
@@ -59,9 +63,18 @@ async def classify_intent(state: RAGState) -> dict:
     llm = state["llm"]
 
     try:
-        structured_llm = llm.with_structured_output(IntentDecision, method="json_schema")
+        logger.info(
+            "classify_intent: model=%s, query_length=%d, query_preview=%s",
+            getattr(llm, 'model', 'unknown'),
+            len(query),
+            query[:100].replace('\n', ' ')
+        )
+        
+        structured_llm = llm.with_structured_output(IntentDecision, method="json_mode")
+        logger.info("classify_intent: invoking structured LLM with json_mode...")
+        
         result = await structured_llm.ainvoke([
-            SystemMessage(content="""Classify the user's query:
+            SystemMessage(content="""Classify the user's query. Respond in JSON format with {"intent": "casual"|"summary"|"specific"}.
 
 CASUAL: greetings, thanks, general chat, time/date questions, meta-questions about the assistant
 - Examples: "hi", "hello", "how are you", "what's today's date", "thanks", "good morning"
@@ -76,6 +89,8 @@ IMPORTANT: If the query asks for ANY kind of overview or comprehensive coverage,
             HumanMessage(content=query),
         ])
 
+        logger.info("classify_intent: success, intent=%s", getattr(result, 'intent', 'unknown'))
+
         if result is None:
             return {"intent": "specific"}
 
@@ -83,8 +98,25 @@ IMPORTANT: If the query asks for ANY kind of overview or comprehensive coverage,
 
     except Exception as e:
         model_name = getattr(llm, 'model', 'unknown')
+        error_type = type(e).__name__
+        error_msg = str(e)
+        
+        logger.error(
+            "classify_intent failed: model=%s, error_type=%s, error_msg=%s",
+            model_name, error_type, error_msg,
+        )
+        
+        # Extract OpenAI/HTTP error details
+        if hasattr(e, 'status_code'):
+            logger.error("classify_intent: HTTP status=%s", e.status_code)
+        if hasattr(e, 'response'):
+            response_text = e.response.text if hasattr(e.response, 'text') else str(e.response)
+            logger.error("classify_intent: response_body=%s", response_text)
+        if hasattr(e, 'body'):
+            logger.error("classify_intent: error_body=%s", e.body)
+        
         raise ValueError(
-            f"Model selected: {model_name}, does not support tool and/or function calling, please pick another!"
+            f"Model '{model_name}' failed: {error_type} - {error_msg}"
         ) from e
 
 
@@ -125,12 +157,14 @@ async def retrieve_top_k(state: RAGState) -> dict:
     collection_name = state.get("collection_name", "default")
     top_k = state.get("top_k", settings.top_k)
     file_scope = state.get("file_scope")
+    embedding_model = state.get("embedding_model")
 
     pre_filter = {"user_id": user_id, "collection_name": collection_name}
     if file_scope:
         pre_filter["metadata.source"] = {"$in": file_scope}
 
-    docs = await mongodb.vectorstore.asimilarity_search(query, k=top_k, pre_filter=pre_filter)
+    vectorstore = mongodb.get_vectorstore(embedding_model)
+    docs = await vectorstore.asimilarity_search(query, k=top_k, pre_filter=pre_filter)
 
     if not docs:
         return {"context": "", "retrieved_docs": []}
@@ -151,10 +185,24 @@ async def rephrase_query_node(state: RAGState) -> dict:
     retry_count = state.get("retry_count", 0)
     llm = state["llm"]
 
-    response = await llm.ainvoke([
-        SystemMessage(content="Rephrase this query to improve retrieval. Use different keywords or synonyms. Return ONLY the rephrased query, no explanation."),
-        HumanMessage(content=query)
-    ])
+    logger.info(
+        "rephrase_query: model=%s, query_length=%d, retry=%d",
+        getattr(llm, 'model', 'unknown'), len(query), retry_count
+    )
+
+    try:
+        response = await llm.ainvoke([
+            SystemMessage(content="Rephrase this query to improve retrieval. Use different keywords or synonyms. Return ONLY the rephrased query, no explanation."),
+            HumanMessage(content=query)
+        ])
+        logger.info("rephrase_query: success, rephrased_length=%d", len(response.content))
+    except Exception as e:
+        logger.exception("rephrase_query failed: model=%s", getattr(llm, 'model', 'unknown'))
+        if hasattr(e, 'status_code'):
+            logger.error("rephrase_query: HTTP status=%s", e.status_code)
+        if hasattr(e, 'body'):
+            logger.error("rephrase_query: error_body=%s", e.body)
+        raise
 
     return {
         "current_query": response.content.strip(),
@@ -170,12 +218,46 @@ async def generate_direct(state: RAGState) -> dict:
 
     system_prompt = f"""You are a friendly research assistant. Today's date is {today}. Engage naturally in conversation.
 
-When using structured markdown content (tables, lists, diagrams, code blocks, or any visual layout), ensure every element is on its own line with proper spacing. Never concatenate multiple lines together.
+When formatting your response:
+
+Tables - Use proper markdown table syntax:
+| Column 1 | Column 2 | Column 3 |
+|----------|----------|----------|
+| Data     | Data     | Data     |
+
+Lists - Use markdown list syntax:
+- Item 1
+- Item 2
+- Item 3
+
+Code - Use fenced code blocks with language tags:
+```python
+def example():
+    return "code"
+```
+
+Never concatenate multiple lines together. Keep cells concise (under 20 words).
 """
 
     llm_messages = [SystemMessage(content=system_prompt)] + messages
 
-    response = await llm.ainvoke(llm_messages)
+    total_length = sum(len(str(m.content)) for m in llm_messages)
+    logger.info(
+        "generate_direct: model=%s, message_count=%d, total_length=%d",
+        getattr(llm, 'model', 'unknown'), len(llm_messages), total_length
+    )
+
+    try:
+        response = await llm.ainvoke(llm_messages)
+        logger.info("generate_direct: success, response_length=%d", len(response.content))
+    except Exception as e:
+        logger.exception("generate_direct failed: model=%s", getattr(llm, 'model', 'unknown'))
+        if hasattr(e, 'status_code'):
+            logger.error("generate_direct: HTTP status=%s", e.status_code)
+        if hasattr(e, 'body'):
+            logger.error("generate_direct: error_body=%s", e.body)
+        raise
+
     return {"messages": [response]}
 
 
@@ -204,7 +286,13 @@ Guidelines:
 - Use the full document context to create a thorough summary
 - Organize the summary logically, covering all sections
 - Be conversational and natural, not robotic
-- When using structured markdown content (tables, lists, diagrams, code blocks, or any visual layout), ensure every element is on its own line with proper spacing. Never concatenate multiple lines together.
+- When formatting tables, use proper markdown syntax:
+| Column 1 | Column 2 |
+|----------|----------|
+| Data     | Data     |
+- For lists, use: - Item 1\n- Item 2
+- For code, use fenced blocks with language tags
+- Never concatenate multiple lines together
 
 Context:
 {state['context']}"""
@@ -216,14 +304,36 @@ Guidelines:
 - Use conversation history to remember what the user has told you
 - If the context doesn't contain relevant information, you can answer from general knowledge
 - Be conversational and natural, not robotic
-- When using structured markdown content (tables, lists, diagrams, code blocks, or any visual layout), ensure every element is on its own line with proper spacing. Never concatenate multiple lines together.
+- When formatting tables, use proper markdown syntax:
+| Column 1 | Column 2 |
+|----------|----------|
+| Data     | Data     |
+- For lists, use: - Item 1\n- Item 2
+- For code, use fenced blocks with language tags
+- Never concatenate multiple lines together
 
 Context:
 {state['context']}"""
 
     llm_messages = [SystemMessage(content=system_prompt)] + messages
 
-    response = await llm.ainvoke(llm_messages)
+    total_length = sum(len(str(m.content)) for m in llm_messages)
+    logger.info(
+        "generate: model=%s, intent=%s, message_count=%d, total_length=%d, context_length=%d",
+        getattr(llm, 'model', 'unknown'), intent, len(llm_messages), total_length, len(state['context'])
+    )
+
+    try:
+        response = await llm.ainvoke(llm_messages)
+        logger.info("generate: success, response_length=%d", len(response.content))
+    except Exception as e:
+        logger.exception("generate failed: model=%s, intent=%s", getattr(llm, 'model', 'unknown'), intent)
+        if hasattr(e, 'status_code'):
+            logger.error("generate: HTTP status=%s", e.status_code)
+        if hasattr(e, 'body'):
+            logger.error("generate: error_body=%s", e.body)
+        raise
+
     return {"messages": [response]}
 
 
@@ -286,11 +396,20 @@ async def retrieval_pipeline(
     llm_provider: str | None = None,
     llm_model: str | None = None,
     file_scope: list[str] | None = None,
+    embedding_model: str | None = None,
 ) -> AsyncGenerator[tuple[str, str | list[dict]], None]:
     """Stream RAG response with conversation history from frontend."""
     all_messages = [m.model_dump() for m in messages] + [{"role": "user", "content": query}]
 
     resolved_provider = llm_provider or "openrouter"
+    resolved_model = llm_model or settings.llm_model
+
+    logger.info(
+        "retrieval_pipeline START: query_length=%d, collection=%s, provider=%s, model=%s, "
+        "top_k=%s, max_retries=%s, history_messages=%d, file_scope=%s",
+        len(query), collection_name, resolved_provider, resolved_model,
+        top_k, max_retries, len(messages or []), file_scope
+    )
 
     if resolved_provider == "ollama":
         if not llm_model:
@@ -299,7 +418,17 @@ async def retrieval_pipeline(
             return
         llm = mongodb.get_llm(llm_model)
     else:
-        llm = mongodb.llm
+        try:
+            llm = mongodb.get_openrouter_llm(resolved_model)
+            logger.info(
+                "retrieval_pipeline: OpenRouter LLM created, model=%s, base_url=%s",
+                resolved_model, settings.openrouter_base_url
+            )
+        except ValueError as e:
+            logger.error("retrieval_pipeline: failed to create LLM - %s", str(e))
+            yield ("error", str(e))
+            yield ("done", None)
+            return
 
     rag_pipeline = get_compiled_graph()
 
@@ -315,6 +444,7 @@ async def retrieval_pipeline(
         "llm": llm,
         "top_k": top_k or settings.top_k,
         "file_scope": file_scope,
+        "embedding_model": embedding_model,
     }
 
     sources_yielded = False
@@ -330,6 +460,7 @@ async def retrieval_pipeline(
             node_name = metadata.get("langgraph_node")
 
             if event_type == "on_chain_start" and node_name in node_names:
+                logger.info("pipeline: entering node=%s", node_name)
                 yield ("node_start", node_name)
 
             elif event_type == "on_chat_model_stream":
@@ -364,7 +495,25 @@ async def retrieval_pipeline(
                         yield ("sources", sources)
                         sources_yielded = True
     except ValueError as e:
+        logger.exception("retrieval_pipeline ValueError")
         yield ("error", str(e))
+        yield ("done", None)
+        return
+    except Exception as e:
+        error_type = type(e).__name__
+        error_msg = str(e)
+        logger.exception(
+            "retrieval_pipeline failed: error_type=%s, error_msg=%s",
+            error_type, error_msg,
+        )
+        if hasattr(e, 'status_code'):
+            logger.error("retrieval_pipeline: HTTP status=%s", e.status_code)
+        if hasattr(e, 'body'):
+            logger.error("retrieval_pipeline: error_body=%s", e.body)
+        if hasattr(e, 'response'):
+            response_text = e.response.text if hasattr(e.response, 'text') else str(e.response)
+            logger.error("retrieval_pipeline: response_body=%s", response_text)
+        yield ("error", f"LLM error: {error_type} - {error_msg[:200]}")
         yield ("done", None)
         return
 

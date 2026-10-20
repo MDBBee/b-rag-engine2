@@ -46,7 +46,7 @@ def get_page_count(file_path: str) -> int:
         return 0
 
 
-async def extract_text_by_page(file_path: str) -> list[dict]:
+async def extract_text_by_page(file_path: str, use_ocr: bool | None = None) -> list[dict]:
     """Extract text per page for PDFs/DOCX/PPTX. Returns list of {text, page_number}.
     
     For PDFs: Extract directly with pymupdf
@@ -77,7 +77,8 @@ async def extract_text_by_page(file_path: str) -> list[dict]:
             f"PDF extraction: {total_text_length} chars of text, {total_images} images found in {file_path}"
         )
         
-        if total_text_length < settings.ocr_text_threshold and total_images > 0:
+        should_ocr = use_ocr if use_ocr is not None else (total_text_length < settings.ocr_text_threshold)
+        if should_ocr and total_images > 0:
             logger.info(
                 f"PDF appears to be a scanned document (text < {settings.ocr_text_threshold} chars, has {total_images} images), "
                 f"attempting OCR for: {file_path}"
@@ -93,13 +94,19 @@ async def extract_text_by_page(file_path: str) -> list[dict]:
                     llm_client=client,
                     llm_model=settings.vision_model or settings.llm_model,
                 )
-                result = await asyncio.to_thread(md.convert, file_path)
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(md.convert, file_path),
+                    timeout=120.0
+                )
                 if result.text_content and result.text_content.strip():
                     logger.info(f"OCR successfully extracted {len(result.text_content)} chars from scanned PDF")
                     return [{"text": result.text_content, "page_number": 1}]
                 else:
                     logger.warning(f"OCR failed to extract text from scanned PDF: {file_path}")
                     return []
+            except TimeoutError:
+                logger.warning(f"OCR timed out after 120 seconds for {file_path}")
+                return []
             except Exception:
                 logger.exception(f"OCR failed for {file_path}")
                 return []
@@ -139,7 +146,9 @@ async def ingestion_pipeline_stream(
     chunk_size: int | None = None,
     chunk_overlap: int | None = None,
     text_splitter: str | None = None,
+    embedding_model: str | None = None,
     transcript_text: str | None = None,
+    use_ocr: bool | None = None,
 ) -> AsyncGenerator[tuple[str, dict], None]:
     """Streaming ingestion pipeline that yields progress events.
     
@@ -163,7 +172,7 @@ async def ingestion_pipeline_stream(
             yield ("progress", {"percent": 50, "stage": "partition"})
         else:
             document_type = detect_document_type(file_path)
-            page_texts = await extract_text_by_page(file_path)
+            page_texts = await extract_text_by_page(file_path, use_ocr)
             yield ("progress", {"percent": 100, "stage": "partition"})
 
         no_of_pages = len([p for p in page_texts if p["page_number"] is not None])
@@ -237,8 +246,9 @@ async def ingestion_pipeline_stream(
         for attempt in range(2):
             try:
                 yield ("progress", {"percent": 20, "stage": "vectorize"})
+                embeddings_instance = mongodb.get_embeddings(embedding_model)
                 embedding_vectors = await asyncio.wait_for(
-                    asyncio.to_thread(mongodb.embeddings.embed_documents, texts),
+                    asyncio.to_thread(embeddings_instance.embed_documents, texts),
                     timeout=120.0
                 )
                 break

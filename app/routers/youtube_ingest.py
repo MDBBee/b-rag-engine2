@@ -2,9 +2,10 @@ import json
 import logging
 import re
 import uuid
+from collections.abc import AsyncIterable
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.sse import EventSourceResponse
 
 from app.middleware.auth import UserInfo, get_current_user
 from app.utils.ingestion_pipeline import ingestion_pipeline_stream
@@ -36,7 +37,7 @@ def video_id_to_collection_name(video_id: str) -> str:
 async def ingest_youtube_stream(
     request: YouTubeURLRequest,
     user: UserInfo = Depends(get_current_user),
-):
+) -> EventSourceResponse:
     """Streaming YouTube ingestion endpoint. Returns SSE events with progress updates."""
     video_id = extract_video_id(request.url)
     if not video_id:
@@ -50,7 +51,9 @@ async def ingest_youtube_stream(
     collection_name = request.collection_name or video_id_to_collection_name(video_id)
     filename = request.file_name or f"youtube_{video_id}.txt"
 
-    async def event_generator():
+    logger.info("YouTube ingestion streaming: video=%s lang=%s", video_id, language)
+
+    async def _stream() -> AsyncIterable[str]:
         try:
             async for event_type, data in ingestion_pipeline_stream(
                 file_path=None,
@@ -64,7 +67,7 @@ async def ingest_youtube_stream(
                 yield f"data: {payload}\n\n"
         except Exception:
             logger.exception("YouTube ingestion stream failed for %s", video_id)
-            yield f"data: {json.dumps({'type': 'error', 'message': 'Ingestion failed'})}\n\n"
+            error_payload = json.dumps({"type": "error", "message": "Ingestion failed"})
+            yield f"data: {error_payload}\n\n"
 
-    logger.info("YouTube ingestion streaming: video=%s lang=%s", video_id, language)
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return EventSourceResponse(_stream())

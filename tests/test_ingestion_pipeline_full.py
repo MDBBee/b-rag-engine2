@@ -12,6 +12,11 @@ async def test_ingestion_pipeline_success():
         mock_mongodb.vectors.count_documents = AsyncMock(return_value=0)
         mock_mongodb.projects.find_one = AsyncMock(return_value=None)
         
+        # Mock get_embeddings to return a mock embeddings instance
+        mock_embeddings = MagicMock()
+        mock_embeddings.embed_documents.return_value = [[0.1, 0.2, 0.3]]
+        mock_mongodb.get_embeddings.return_value = mock_embeddings
+        
         mock_md_instance = MagicMock()
         mock_md_instance.convert.return_value.text_content = "Test content here"
         mock_markitdown.return_value = mock_md_instance
@@ -23,7 +28,6 @@ async def test_ingestion_pipeline_success():
         mock_splitter_instance.split_text.return_value = [mock_chunk]
         mock_splitter.return_value = mock_splitter_instance
         
-        mock_mongodb.embeddings.embed_documents.return_value = [[0.1, 0.2, 0.3]]
         mock_mongodb.vectors.insert_many = AsyncMock()
         
         result = await ingestion_pipeline(
@@ -44,9 +48,9 @@ async def test_ingestion_pipeline_success():
             user_id="user-123",
             name="test.txt",
             collection_name="test-collection",
-            file_name="test.txt",
+            file_name=["test.txt"],
             chunk_count=1,
-            document_type="txt",
+            document_type=[{"name": "test.txt", "type": "txt"}],
         )
 
 
@@ -61,10 +65,16 @@ async def test_ingestion_pipeline_append():
         mock_mongodb.projects.find_one = AsyncMock(return_value={
             "user_id": "user-123",
             "collection_name": "test-collection",
-            "file_name": "chapter1.txt",
+            "file_name": ["chapter1.txt"],  # file_name should be a list
+            "document_type": [{"name": "chapter1.txt", "type": "txt"}],
             "chunk_count": 5,
         })
         mock_mongodb.projects.update_one = AsyncMock()
+        
+        # Mock get_embeddings to return a mock embeddings instance
+        mock_embeddings = MagicMock()
+        mock_embeddings.embed_documents.return_value = [[0.1, 0.2, 0.3]]
+        mock_mongodb.get_embeddings.return_value = mock_embeddings
         
         mock_md_instance = MagicMock()
         mock_md_instance.convert.return_value.text_content = "Chapter 2 content"
@@ -77,7 +87,6 @@ async def test_ingestion_pipeline_append():
         mock_splitter_instance.split_text.return_value = [mock_chunk]
         mock_splitter.return_value = mock_splitter_instance
         
-        mock_mongodb.embeddings.embed_documents.return_value = [[0.1, 0.2, 0.3]]
         mock_mongodb.vectors.insert_many = AsyncMock()
         
         result = await ingestion_pipeline(

@@ -2,10 +2,11 @@ import json
 import logging
 import re
 import uuid
+from collections.abc import AsyncIterable
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from app.config import settings
 from app.middleware.auth import UserInfo, get_current_user
@@ -33,7 +34,7 @@ def filename_to_collection_name(filename: str) -> str:
     return name[:MAX_COLLECTION_NAME_LENGTH]
 
 
-@router.post("")
+@router.post("", response_class=EventSourceResponse)
 async def ingest_stream(
     file: UploadFile = File(...),
     collection_name: str | None = Form(None),
@@ -41,37 +42,44 @@ async def ingest_stream(
     chunk_size: int | None = Form(None),
     chunk_overlap: int | None = Form(None),
     text_splitter: str | None = Form(None),
+    embedding_model: str | None = Form(None),
     force_reprocess: bool = Form(False),
+    use_ocr: bool = Form(False),
     user: UserInfo = Depends(get_current_user),
-):
+) -> AsyncIterable[ServerSentEvent]:
     """Streaming ingestion endpoint. Returns SSE events with progress updates."""
+    if use_ocr and user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required for OCR")
+
     tmp_path = await save_temp_with_limit(file, settings.max_ingest_file_size)
 
     if not collection_name:
         collection_name = filename_to_collection_name(file.filename)
 
-    async def event_generator():
+    try:
+        if force_reprocess:
+            from app.utils import mongodb
+            await mongodb.delete_vectors_by_source(user.id, collection_name, file.filename)
+
+        async for event_type, data in ingestion_pipeline_stream(
+            file_path=tmp_path,
+            filename=file.filename,
+            collection_name=collection_name,
+            user_id=user.id,
+            project_name=project_name,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            text_splitter=text_splitter,
+            embedding_model=embedding_model,
+            use_ocr=use_ocr,
+        ):
+            payload = json.dumps({"type": event_type, **data})
+            yield ServerSentEvent(raw_data=payload)
+    except Exception:
+        logger.exception("Ingestion stream failed")
+        yield ServerSentEvent(raw_data=json.dumps({"type": "error", "message": "Ingestion failed"}))
+    finally:
         try:
-            if force_reprocess:
-                from app.utils import mongodb
-                await mongodb.delete_vectors_by_source(user.id, collection_name, file.filename)
-
-            async for event_type, data in ingestion_pipeline_stream(
-                file_path=tmp_path,
-                filename=file.filename,
-                collection_name=collection_name,
-                user_id=user.id,
-                project_name=project_name,
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap,
-                text_splitter=text_splitter,
-            ):
-                payload = json.dumps({"type": event_type, **data})
-                yield f"data: {payload}\n\n"
-        except Exception:
-            logger.exception("Ingestion stream failed")
-            yield f"data: {json.dumps({'type': 'error', 'message': 'Ingestion failed'})}\n\n"
-        finally:
             Path(tmp_path).unlink(missing_ok=True)
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+        except PermissionError:
+            logger.warning(f"Could not delete temp file {tmp_path} - still in use by OCR thread. File will be cleaned up by OS.")
