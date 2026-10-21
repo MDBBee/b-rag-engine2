@@ -20,9 +20,9 @@ class Settings(BaseSettings):
         "openai/gpt-4o-mini",
         "qwen/qwen3.7-flash",
         "nvidia/nemotron-3.5-super-vl:free",
-        "minimax/minimax-m3.1-flash:free"
+        "minimax/minimax-m3.1-flash:free",
         "google/gemma-4-26b-a4b-it:free",
-        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
         "openrouter/free",
     ]
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
