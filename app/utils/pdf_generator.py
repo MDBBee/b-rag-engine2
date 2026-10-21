@@ -160,28 +160,44 @@ def _convert_table(element: Tag, styles) -> list:
     rows = []
     header_rows = 0
 
+    # Calculate available width (A4 width minus margins)
+    page_width = A4[0] - 40 * mm  # 595pt - 40mm ≈ 515pt
+
+    # Create cell paragraph style for text wrapping
+    cell_style = ParagraphStyle(
+        "CellStyle",
+        parent=styles["Normal"],
+        fontSize=9,
+        leading=12,
+    )
+
     thead = element.find("thead")
     if thead:
         for tr in thead.find_all("tr"):
-            row = [_get_inline_text(td) or " " for td in tr.find_all(["th", "td"])]
+            row = [Paragraph(_get_inline_text(td) or " ", cell_style) for td in tr.find_all(["th", "td"])]
             rows.append(row)
         header_rows = 1
 
     tbody = element.find("tbody")
     if tbody:
         for tr in tbody.find_all("tr"):
-            row = [_get_inline_text(td) or " " for td in tr.find_all(["td", "th"])]
+            row = [Paragraph(_get_inline_text(td) or " ", cell_style) for td in tr.find_all(["td", "th"])]
             rows.append(row)
     else:
         for tr in element.find_all("tr", recursive=False):
-            row = [_get_inline_text(td) or " " for td in tr.find_all(["td", "th"])]
+            row = [Paragraph(_get_inline_text(td) or " ", cell_style) for td in tr.find_all(["td", "th"])]
             if row:
                 rows.append(row)
 
     if not rows:
         return []
 
-    table = Table(rows, repeatRows=header_rows)
+    # Calculate column widths
+    num_cols = max(len(row) for row in rows)
+    col_width = page_width / num_cols
+    col_widths = [col_width] * num_cols
+
+    table = Table(rows, repeatRows=header_rows, colWidths=col_widths)
     table.setStyle(
         TableStyle(
             [
@@ -190,10 +206,10 @@ def _convert_table(element: Tag, styles) -> list:
                 ("FONTNAME", (0, 0), (-1, header_rows - 1), "Helvetica-Bold"),
                 ("ALIGN", (0, 0), (-1, -1), "LEFT"),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
             ]
         )
     )

@@ -17,6 +17,7 @@ from app.routers import (
     ingestion,
     quiz,
     retrieval,
+    validate,
     youtube_ingest,
 )
 from app.utils.mongodb import close_mongodb, init_mongodb
@@ -70,6 +71,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 app.include_router(ingestion.router)
 app.include_router(youtube_ingest.router)
+app.include_router(validate.router)
 app.include_router(retrieval.router)
 app.include_router(collections.router)
 app.include_router(file_processing.router)
