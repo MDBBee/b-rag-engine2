@@ -51,6 +51,7 @@ async def query_stream(
             messages=query_request.messages,
             file_name=query_request.file_name,
             top_k=query_request.top_k,
+            summary_chunks=query_request.summary_chunks,
             max_retries=query_request.max_retries,
             llm_provider=query_request.llm_provider,
             llm_model=query_request.llm_model,
@@ -65,6 +66,8 @@ async def query_stream(
                 yield ServerSentEvent(raw_data=json.dumps({"type": "token", "content": data}))
             elif event_type == "sources":
                 yield ServerSentEvent(raw_data=json.dumps({"type": "sources", "sources": data}))
+            elif event_type == "usage":
+                yield ServerSentEvent(raw_data=json.dumps({"type": "usage", "usage": data}))
             elif event_type == "done":
                 yield ServerSentEvent(raw_data=json.dumps({"type": "done"}))
     except Exception:

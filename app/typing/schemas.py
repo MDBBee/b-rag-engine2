@@ -40,6 +40,7 @@ class QueryRequest(BaseModel):
     llm_provider: str | None = Field(default=None)
     llm_model: str | None = Field(default=None)
     top_k: int | None = Field(default=None)
+    summary_chunks: int | None = Field(default=None, ge=10, le=1000)
     messages: list[ChatMessageHistory] = Field(default_factory=list)
     file_name: str | None = Field(default=None)
     max_retries: int | None = Field(default=None, ge=0, le=3)
@@ -55,6 +56,9 @@ class SourceChunk(BaseModel):
 class QueryResponse(BaseModel):
     answer: str
     sources: list[SourceChunk] = Field(default_factory=list)
+    model_used: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 class DocumentInfo(BaseModel):

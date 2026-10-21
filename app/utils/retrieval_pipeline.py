@@ -50,10 +50,12 @@ class RAGState(TypedDict):
     retrieved_docs: list
     llm: object
     top_k: int
+    summary_chunks: int | None
     retry_count: int
     max_retries: int
     file_scope: list[str] | None
     embedding_model: str | None
+    usage_metadata: dict | None
 
 
 async def classify_intent(state: RAGState) -> dict:
@@ -123,7 +125,7 @@ async def retrieve_all(state: RAGState) -> dict:
     """Retrieve all chunks in document order for summaries."""
     project_name = state.get("project_name", "default")
     user_id = state.get("user_id", "")
-    max_chunks = settings.max_context_chunks
+    max_chunks = state.get("summary_chunks") or settings.max_context_chunks
     file_scope = state.get("file_scope")
 
     filter_query = {"user_id": user_id, "project_name": project_name}
@@ -253,6 +255,11 @@ Never concatenate multiple lines together. Keep cells concise (under 20 words).
     try:
         response = await llm.ainvoke(llm_messages)
         logger.info("generate_direct: success, response_length=%d", len(response.content))
+        
+        # Extract token usage from response
+        usage_metadata = getattr(response, 'usage_metadata', None)
+        if usage_metadata:
+            logger.info("generate_direct: token_usage=%s", usage_metadata)
     except Exception as e:
         logger.exception("generate_direct failed: model=%s", getattr(llm, 'model', 'unknown'))
         if hasattr(e, 'status_code'):
@@ -261,7 +268,7 @@ Never concatenate multiple lines together. Keep cells concise (under 20 words).
             logger.error("generate_direct: error_body=%s", e.body)
         raise
 
-    return {"messages": [response]}
+    return {"messages": [response], "usage_metadata": usage_metadata}
 
 
 async def generate(state: RAGState) -> dict:
@@ -341,6 +348,11 @@ Context:
     try:
         response = await llm.ainvoke(llm_messages)
         logger.info("generate: success, response_length=%d", len(response.content))
+        
+        # Extract token usage from response
+        usage_metadata = getattr(response, 'usage_metadata', None)
+        if usage_metadata:
+            logger.info("generate: token_usage=%s", usage_metadata)
     except Exception as e:
         logger.exception("generate failed: model=%s, intent=%s", getattr(llm, 'model', 'unknown'), intent)
         if hasattr(e, 'status_code'):
@@ -349,7 +361,7 @@ Context:
             logger.error("generate: error_body=%s", e.body)
         raise
 
-    return {"messages": [response]}
+    return {"messages": [response], "usage_metadata": usage_metadata}
 
 
 def intent_router(state: RAGState) -> Literal["generate_direct", "retrieve_all", "retrieve_top_k"]:
@@ -406,6 +418,7 @@ async def retrieval_pipeline(
     messages: list[ChatMessageHistory] | None = None,
     file_name: str | None = None,
     top_k: int | None = None,
+    summary_chunks: int | None = None,
     max_retries: int | None = None,
     llm_provider: str | None = None,
     llm_model: str | None = None,
@@ -420,9 +433,9 @@ async def retrieval_pipeline(
 
     logger.info(
         "retrieval_pipeline START: query_length=%d, project=%s, provider=%s, model=%s, "
-        "top_k=%s, max_retries=%s, history_messages=%d, file_scope=%s",
+        "top_k=%s, summary_chunks=%s, max_retries=%s, history_messages=%d, file_scope=%s",
         len(query), project_name, resolved_provider, resolved_model,
-        top_k, max_retries, len(messages or []), file_scope
+        top_k, summary_chunks, max_retries, len(messages or []), file_scope
     )
 
     if resolved_provider == "ollama":
@@ -456,8 +469,10 @@ async def retrieval_pipeline(
         "file_name": file_name or "",
         "llm": llm,
         "top_k": top_k or settings.top_k,
+        "summary_chunks": summary_chunks,
         "file_scope": file_scope,
         "embedding_model": embedding_model,
+        "usage_metadata": None,
     }
 
     sources_yielded = False
@@ -507,6 +522,13 @@ async def retrieval_pipeline(
                                 })
                         yield ("sources", sources)
                         sources_yielded = True
+
+            elif event_type == "on_chain_end" and node_name in ("generate", "generate_direct"):
+                output = event.get("data", {}).get("output", {})
+                if isinstance(output, dict):
+                    usage_metadata = output.get("usage_metadata")
+                    if usage_metadata:
+                        yield ("usage", usage_metadata)
     except ValueError as e:
         logger.exception("retrieval_pipeline ValueError")
         yield ("error", str(e))

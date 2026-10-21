@@ -17,6 +17,7 @@ from app.typing.schemas import ChunkData, IngestResponse, SummarizedChunk
 from app.utils import mongodb
 from app.utils.mongodb import create_project
 from app.utils.text_splitters import get_splitter
+from app.utils.token_counter import count_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +177,13 @@ async def ingestion_pipeline_stream(
 
         no_of_pages = len([p for p in page_texts if p["page_number"] is not None])
 
+        # Count tokens for the entire document
+        resolved_embedding_model = embedding_model or settings.embedding_model
+        total_token_count = sum(
+            count_tokens(page_data["text"], resolved_embedding_model)
+            for page_data in page_texts
+        )
+
         resolved_chunk_size = chunk_size if chunk_size is not None else settings.chunk_size
         resolved_chunk_overlap = chunk_overlap if chunk_overlap is not None else settings.chunk_overlap
         resolved_splitter = text_splitter or settings.text_splitter
@@ -300,6 +308,8 @@ async def ingestion_pipeline_stream(
                     "name": filename,
                     "type": document_type,
                     "chunk_count": len(docs_to_insert),
+                    "token_count": total_token_count,
+                    "embedding_model": resolved_embedding_model,
                     "uploaded_at": datetime.now(UTC),
                 }
                 await mongodb.projects.update_one(
@@ -318,6 +328,8 @@ async def ingestion_pipeline_stream(
                     "name": filename,
                     "type": document_type,
                     "chunk_count": len(docs_to_insert),
+                    "token_count": total_token_count,
+                    "embedding_model": resolved_embedding_model,
                     "uploaded_at": datetime.now(UTC),
                 }],
                 chunk_count=len(docs_to_insert),

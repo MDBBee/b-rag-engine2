@@ -2,6 +2,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.config import settings
 from app.middleware.auth import UserInfo, get_current_user
 from app.typing.schemas import (
     CascadeDeleteResponse,
@@ -104,6 +105,65 @@ async def get_documents(project_name: str, user: UserInfo = Depends(get_current_
     except Exception:
         logger.exception("Failed to get documents")
         raise HTTPException(status_code=500, detail="Failed to get documents")
+
+
+@router.post("/{project_name}/documents/{file_name}/recalculate-tokens")
+async def recalculate_document_tokens(
+    project_name: str,
+    file_name: str,
+    user: UserInfo = Depends(get_current_user),
+):
+    """Recalculate token count for a specific document."""
+    try:
+        from app.utils.token_counter import count_tokens
+        from app.utils import mongodb as mongo
+
+        # Get project to find embedding model
+        project_doc = await projects.find_one({
+            "user_id": user.id,
+            "project_name": project_name,
+        })
+
+        if not project_doc:
+            raise HTTPException(status_code=404, detail=f"Collection '{project_name}' not found")
+
+        # Find document in project
+        documents = project_doc.get("documents", [])
+        doc_info = next((d for d in documents if d["name"] == file_name), None)
+        
+        if not doc_info:
+            raise HTTPException(status_code=404, detail=f"Document '{file_name}' not found")
+
+        # Get all chunks for this file
+        cursor = mongo.vectors.find({
+            "user_id": user.id,
+            "project_name": project_name,
+            "metadata.source": file_name,
+        })
+
+        # Count tokens using the embedding model
+        embedding_model = doc_info.get("embedding_model") or settings.embedding_model
+        total_tokens = 0
+        async for chunk in cursor:
+            total_tokens += count_tokens(chunk.get("content", ""), embedding_model)
+
+        # Update document in MongoDB
+        await projects.update_one(
+            {"user_id": user.id, "project_name": project_name},
+            {
+                "$set": {
+                    "documents.$[elem].token_count": total_tokens,
+                }
+            },
+            array_filters=[{"elem.name": file_name}]
+        )
+
+        return {"status": "ok", "token_count": total_tokens}
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to recalculate tokens")
+        raise HTTPException(status_code=500, detail="Failed to recalculate tokens")
 
 
 @router.delete("/{project_name}", response_model=CascadeDeleteResponse)
