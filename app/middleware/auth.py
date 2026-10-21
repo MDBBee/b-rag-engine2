@@ -1,7 +1,7 @@
 import logging
 
-from fastapi import Depends, Header, HTTPException, status
 import jwt
+from fastapi import Depends, Header, HTTPException, status
 from jwt.exceptions import ExpiredSignatureError, PyJWTError
 from pydantic import BaseModel
 

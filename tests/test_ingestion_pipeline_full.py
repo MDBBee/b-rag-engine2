@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from app.utils.ingestion_pipeline import ingestion_pipeline
 
@@ -52,6 +52,8 @@ async def test_ingestion_pipeline_success():
                 "name": "test.txt",
                 "type": "txt",
                 "chunk_count": 1,
+                "token_count": ANY,
+                "embedding_model": "text-embedding-3-small",
                 "uploaded_at": mock_create_project.call_args.kwargs["documents"][0]["uploaded_at"],
             }],
             chunk_count=1,

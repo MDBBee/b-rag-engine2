@@ -366,6 +366,7 @@ async def ingestion_pipeline_stream(
             no_of_pages=no_of_pages,
             first_chunk_index=existing_count,
             last_chunk_index=existing_count + len(docs_to_insert) - 1 if len(docs_to_insert) > 0 else existing_count,
+            token_count=total_token_count,
             chunks=chunks,
             summarized_chunks=summarized_chunks,
         )

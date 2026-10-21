@@ -1,6 +1,6 @@
 import pytest
 from fastapi import HTTPException
-from jose import jwt
+import jwt
 
 from app.config import settings
 from app.middleware.auth import UserInfo, get_current_user, require_admin

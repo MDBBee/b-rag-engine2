@@ -1,5 +1,6 @@
-import tiktoken
 import logging
+
+import tiktoken
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +14,7 @@ def get_encoder(model_name: str) -> tiktoken.Encoding:
         try:
             return tiktoken.encoding_for_model("gpt-4")
         except Exception:
-            pass
+            logger.debug("tiktoken encoding_for_model('gpt-4') failed, falling back")
     
     # Text embedding models
     if "text-embedding" in model_lower:

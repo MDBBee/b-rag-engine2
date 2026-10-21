@@ -10,12 +10,12 @@ from app.typing.schemas import (
     CollectionInfo,
     CollectionUpdateRequest,
 )
+from app.utils import mongodb
 from app.utils.mongodb import (
     delete_collection_cascade,
     delete_vectors_by_source,
     get_collection_chunks,
     list_collections,
-    projects,
     update_project_metadata,
 )
 
@@ -47,7 +47,7 @@ async def get_collection_metadata(project_name: str, user: UserInfo = Depends(ge
             raise HTTPException(status_code=404, detail=f"Collection '{project_name}' not found")
         
         # Get project metadata from projects collection
-        project_doc = await projects.find_one({
+        project_doc = await mongodb.projects.find_one({
             "user_id": user.id,
             "project_name": project_name,
         })
@@ -88,7 +88,7 @@ async def get_chunks(project_name: str, user: UserInfo = Depends(get_current_use
 async def get_documents(project_name: str, user: UserInfo = Depends(get_current_user)):
     """Get all documents in a collection with metadata."""
     try:
-        project_doc = await projects.find_one({
+        project_doc = await mongodb.projects.find_one({
             "user_id": user.id,
             "project_name": project_name,
         })
@@ -116,10 +116,9 @@ async def recalculate_document_tokens(
     """Recalculate token count for a specific document."""
     try:
         from app.utils.token_counter import count_tokens
-        from app.utils import mongodb as mongo
 
         # Get project to find embedding model
-        project_doc = await projects.find_one({
+        project_doc = await mongodb.projects.find_one({
             "user_id": user.id,
             "project_name": project_name,
         })
@@ -135,7 +134,7 @@ async def recalculate_document_tokens(
             raise HTTPException(status_code=404, detail=f"Document '{file_name}' not found")
 
         # Get all chunks for this file
-        cursor = mongo.vectors.find({
+        cursor = mongodb.vectors.find({
             "user_id": user.id,
             "project_name": project_name,
             "metadata.source": file_name,
@@ -148,7 +147,7 @@ async def recalculate_document_tokens(
             total_tokens += count_tokens(chunk.get("content", ""), embedding_model)
 
         # Update document in MongoDB
-        await projects.update_one(
+        await mongodb.projects.update_one(
             {"user_id": user.id, "project_name": project_name},
             {
                 "$set": {

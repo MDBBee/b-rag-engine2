@@ -23,6 +23,7 @@ class IngestResponse(BaseModel):
     no_of_pages: int = 0
     first_chunk_index: int = 0
     last_chunk_index: int = 0
+    token_count: int = 0
     chunks: list[ChunkData] = Field(default_factory=list)
     summarized_chunks: list[SummarizedChunk] = Field(default_factory=list)
     detail: str | None = Field(default=None)
