@@ -140,9 +140,8 @@ async def extract_text_by_page(file_path: str, use_ocr: bool | None = None) -> l
 async def ingestion_pipeline_stream(
     file_path: str | None,
     filename: str,
-    collection_name: str,
+    project_name: str,
     user_id: str,
-    project_name: str | None = None,
     chunk_size: int | None = None,
     chunk_overlap: int | None = None,
     text_splitter: str | None = None,
@@ -161,7 +160,7 @@ async def ingestion_pipeline_stream(
     """
     try:
         existing_count = await mongodb.vectors.count_documents(
-            {"user_id": user_id, "collection_name": collection_name}
+            {"user_id": user_id, "project_name": project_name}
         )
 
         yield ("stage", {"stage": "partition"})
@@ -264,7 +263,7 @@ async def ingestion_pipeline_stream(
         for i, (chunk, vector) in enumerate(zip(final_chunks, embedding_vectors)):
             doc = {
                 "user_id": user_id,
-                "collection_name": collection_name,
+                "project_name": project_name,
                 "chunk_index": existing_count + i,
                 "content": chunk.page_content,
                 "embedding": vector,
@@ -278,38 +277,50 @@ async def ingestion_pipeline_stream(
         yield ("progress", {"percent": 90, "stage": "vectorize"})
 
         existing_project = await mongodb.projects.find_one(
-            {"user_id": user_id, "collection_name": collection_name}
+            {"user_id": user_id, "project_name": project_name}
         )
         
         if existing_project:
-            existing_file_names = existing_project.get("file_name", [])
-            existing_doc_types = existing_project.get("document_type", [])
+            documents = existing_project.get("documents", [])
+            existing_doc = next((d for d in documents if d["name"] == filename), None)
             
-            if filename not in existing_file_names:
-                new_file_names = existing_file_names + [filename]
-                new_doc_types = existing_doc_types + [{"name": filename, "type": document_type}]
+            if existing_doc:
+                await mongodb.projects.update_one(
+                    {"user_id": user_id, "project_name": project_name},
+                    {
+                        "$set": {
+                            "chunk_count": existing_count + len(docs_to_insert),
+                            "documents.$[elem].chunk_count": existing_doc["chunk_count"] + len(docs_to_insert),
+                        },
+                    },
+                    array_filters=[{"elem.name": filename}]
+                )
             else:
-                new_file_names = existing_file_names
-                new_doc_types = existing_doc_types
-            
-            await mongodb.projects.update_one(
-                {"user_id": user_id, "collection_name": collection_name},
-                {
-                    "$set": {
-                        "chunk_count": existing_count + len(docs_to_insert),
-                        "file_name": new_file_names,
-                        "document_type": new_doc_types,
-                    }
+                new_doc = {
+                    "name": filename,
+                    "type": document_type,
+                    "chunk_count": len(docs_to_insert),
+                    "uploaded_at": datetime.now(UTC),
                 }
-            )
+                await mongodb.projects.update_one(
+                    {"user_id": user_id, "project_name": project_name},
+                    {
+                        "$push": {"documents": new_doc},
+                        "$set": {"chunk_count": existing_count + len(docs_to_insert)},
+                    }
+                )
         else:
             await create_project(
                 user_id=user_id,
-                name=project_name or filename,
-                collection_name=collection_name,
-                file_name=[filename],
+                name=filename,
+                project_name=project_name,
+                documents=[{
+                    "name": filename,
+                    "type": document_type,
+                    "chunk_count": len(docs_to_insert),
+                    "uploaded_at": datetime.now(UTC),
+                }],
                 chunk_count=len(docs_to_insert),
-                document_type=[{"name": filename, "type": document_type}],
             )
 
         yield ("progress", {"percent": 100, "stage": "vectorize"})
@@ -360,9 +371,8 @@ async def ingestion_pipeline_stream(
 async def ingestion_pipeline(
     file_path: str | None,
     filename: str,
-    collection_name: str,
+    project_name: str,
     user_id: str,
-    project_name: str | None = None,
     chunk_size: int | None = None,
     chunk_overlap: int | None = None,
     text_splitter: str | None = None,
@@ -373,9 +383,8 @@ async def ingestion_pipeline(
     async for event_type, data in ingestion_pipeline_stream(
         file_path=file_path,
         filename=filename,
-        collection_name=collection_name,
-        user_id=user_id,
         project_name=project_name,
+        user_id=user_id,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         text_splitter=text_splitter,

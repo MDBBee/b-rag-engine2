@@ -3,9 +3,10 @@ import logging
 import re
 from collections.abc import AsyncIterable
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 
+from app.limiter import limiter
 from app.middleware.auth import UserInfo, get_current_user
 from app.typing.schemas import QueryRequest, SummaryExportRequest
 from app.utils.pdf_generator import markdown_to_pdf
@@ -29,31 +30,32 @@ NODE_EVENT_MAP = {
 
 
 @router.post("/stream", response_class=EventSourceResponse)
+@limiter.limit("20/minute")
 async def query_stream(
-    request: QueryRequest, user: UserInfo = Depends(get_current_user)
+    request: Request,
+    query_request: QueryRequest, user: UserInfo = Depends(get_current_user)
 ) -> AsyncIterable[ServerSentEvent]:
     logger.info(
-        "Query request: collection=%s, model=%s, provider=%s, messages=%d",
-        request.collection_name,
-        request.llm_model,
-        request.llm_provider,
-        len(request.messages),
+        "Query request: project=%s, model=%s, provider=%s, messages=%d",
+        query_request.project_name,
+        query_request.llm_model,
+        query_request.llm_provider,
+        len(query_request.messages),
     )
 
     try:
         async for event_type, data in retrieval_pipeline(
-            query=request.query,
-            collection_name=request.collection_name,
+            query=query_request.query,
+            project_name=query_request.project_name,
             user_id=user.id,
-            messages=request.messages,
-            project_name=request.project_name,
-            file_name=request.file_name,
-            top_k=request.top_k,
-            max_retries=request.max_retries,
-            llm_provider=request.llm_provider,
-            llm_model=request.llm_model,
-            file_scope=request.file_scope,
-            embedding_model=request.embedding_model,
+            messages=query_request.messages,
+            file_name=query_request.file_name,
+            top_k=query_request.top_k,
+            max_retries=query_request.max_retries,
+            llm_provider=query_request.llm_provider,
+            llm_model=query_request.llm_model,
+            file_scope=query_request.file_scope,
+            embedding_model=query_request.embedding_model,
         ):
             if event_type == "node_start":
                 fe_type, message = NODE_EVENT_MAP.get(data, (None, None))
@@ -67,7 +69,7 @@ async def query_stream(
                 yield ServerSentEvent(raw_data=json.dumps({"type": "done"}))
     except Exception:
         logger.exception("Query stream failed")
-        yield ServerSentEvent(raw_data=json.dumps({"type": "error", "content": "Query failed. Please try again."}))
+        yield ServerSentEvent(raw_data=json.dumps({"type": "error", "message": "Query failed. Please try again."}))
 
 
 @router.post("/export/pdf")

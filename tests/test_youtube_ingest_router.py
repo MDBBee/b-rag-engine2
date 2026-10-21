@@ -41,13 +41,13 @@ def _parse_sse_events(response_text):
 
 class TestVideoIdToCollectionName:
     def test_normal_id(self):
-        from app.routers.youtube_ingest import video_id_to_collection_name
-        result = video_id_to_collection_name("dQw4w9WgXcQ")
+        from app.routers.youtube_ingest import video_id_to_project_name
+        result = video_id_to_project_name("dQw4w9WgXcQ")
         assert result == "yt_dqw4w9wgxcq"
 
     def test_long_id_truncated(self):
-        from app.routers.youtube_ingest import video_id_to_collection_name
-        result = video_id_to_collection_name("abcdefghijklm")
+        from app.routers.youtube_ingest import video_id_to_project_name
+        result = video_id_to_project_name("abcdefghijklm")
         assert len(result) <= 40
 
 

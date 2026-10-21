@@ -44,9 +44,8 @@ class RAGState(TypedDict):
     current_query: str
     intent: str
     context: str
-    collection_name: str
-    user_id: str
     project_name: str
+    user_id: str
     file_name: str
     retrieved_docs: list
     llm: object
@@ -122,12 +121,12 @@ IMPORTANT: If the query asks for ANY kind of overview or comprehensive coverage,
 
 async def retrieve_all(state: RAGState) -> dict:
     """Retrieve all chunks in document order for summaries."""
-    collection_name = state.get("collection_name", "default")
+    project_name = state.get("project_name", "default")
     user_id = state.get("user_id", "")
     max_chunks = settings.max_context_chunks
     file_scope = state.get("file_scope")
 
-    filter_query = {"user_id": user_id, "collection_name": collection_name}
+    filter_query = {"user_id": user_id, "project_name": project_name}
     if file_scope:
         filter_query["metadata.source"] = {"$in": file_scope}
 
@@ -154,12 +153,12 @@ async def retrieve_top_k(state: RAGState) -> dict:
     """Retrieve relevant documents from vector store."""
     query = state.get("current_query") or state["messages"][-1].content
     user_id = state.get("user_id", "")
-    collection_name = state.get("collection_name", "default")
+    project_name = state.get("project_name", "default")
     top_k = state.get("top_k", settings.top_k)
     file_scope = state.get("file_scope")
     embedding_model = state.get("embedding_model")
 
-    pre_filter = {"user_id": user_id, "collection_name": collection_name}
+    pre_filter = {"user_id": user_id, "project_name": project_name}
     if file_scope:
         pre_filter["metadata.source"] = {"$in": file_scope}
 
@@ -218,6 +217,10 @@ async def generate_direct(state: RAGState) -> dict:
 
     system_prompt = f"""You are a friendly research assistant. Today's date is {today}. Engage naturally in conversation.
 
+Do NOT include:
+- Apologies, filler phrases, or hedging before answering ("Thank you", "I apologize", "You're correct, and...")
+- Placeholder letters (A, B, C, D) in tables — if data is unavailable, write "Data not available"
+
 When formatting your response:
 
 Tables - Use proper markdown table syntax:
@@ -271,12 +274,22 @@ async def generate(state: RAGState) -> dict:
     today = datetime.now(tz=UTC).strftime("%B %d, %Y")
 
     context_prefix = ""
-    if project_name or file_name:
+    file_scope = state.get("file_scope")
+    doc_label = ""
+    if file_scope and len(file_scope) == 1:
+        doc_label = f'document "{file_scope[0]}"'
+    elif file_scope and len(file_scope) > 1:
+        names = ", ".join(f'"{f}"' for f in file_scope)
+        doc_label = f"documents {names}"
+    elif file_name:
+        doc_label = f'document "{file_name}"'
+
+    if project_name or doc_label:
         parts = []
         if project_name:
             parts.append(f'project "{project_name}"')
-        if file_name:
-            parts.append(f'document "{file_name}"')
+        if doc_label:
+            parts.append(doc_label)
         context_prefix = f"You are assisting with {' and '.join(parts)}. Today's date is {today}. "
 
     if intent == "summary":
@@ -285,7 +298,8 @@ async def generate(state: RAGState) -> dict:
 Guidelines:
 - Use the full document context to create a thorough summary
 - Organize the summary logically, covering all sections
-- Be conversational and natural, not robotic
+- Do NOT include apologies, filler phrases, or hedging
+- Do NOT use placeholder letters (A, B, C, D) in tables — write "Data not available" if unknown
 - When formatting tables, use proper markdown syntax:
 | Column 1 | Column 2 |
 |----------|----------|
@@ -303,7 +317,8 @@ Guidelines:
 - Use the document context to answer questions about the documents
 - Use conversation history to remember what the user has told you
 - If the context doesn't contain relevant information, you can answer from general knowledge
-- Be conversational and natural, not robotic
+- Do NOT include apologies, filler phrases, or hedging
+- Do NOT use placeholder letters (A, B, C, D) in tables — write "Data not available" if unknown
 - When formatting tables, use proper markdown syntax:
 | Column 1 | Column 2 |
 |----------|----------|
@@ -386,10 +401,9 @@ def build_graph():
 
 async def retrieval_pipeline(
     query: str,
-    collection_name: str,
+    project_name: str,
     user_id: str,
     messages: list[ChatMessageHistory] | None = None,
-    project_name: str | None = None,
     file_name: str | None = None,
     top_k: int | None = None,
     max_retries: int | None = None,
@@ -405,9 +419,9 @@ async def retrieval_pipeline(
     resolved_model = llm_model or settings.llm_model
 
     logger.info(
-        "retrieval_pipeline START: query_length=%d, collection=%s, provider=%s, model=%s, "
+        "retrieval_pipeline START: query_length=%d, project=%s, provider=%s, model=%s, "
         "top_k=%s, max_retries=%s, history_messages=%d, file_scope=%s",
-        len(query), collection_name, resolved_provider, resolved_model,
+        len(query), project_name, resolved_provider, resolved_model,
         top_k, max_retries, len(messages or []), file_scope
     )
 
@@ -437,9 +451,8 @@ async def retrieval_pipeline(
         "current_query": query,
         "retry_count": 0,
         "max_retries": max_retries if max_retries is not None else settings.max_rephrase_retries,
-        "collection_name": collection_name,
+        "project_name": project_name,
         "user_id": user_id,
-        "project_name": project_name or "",
         "file_name": file_name or "",
         "llm": llm,
         "top_k": top_k or settings.top_k,

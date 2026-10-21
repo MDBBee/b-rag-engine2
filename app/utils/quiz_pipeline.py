@@ -49,7 +49,7 @@ Never concatenate multiple lines together. Keep cells concise (under 20 words).
 
 
 async def generate_quiz(
-    collection_name: str,
+    project_name: str,
     user_id: str,
     llm_provider: str | None = None,
     llm_model: str | None = None,
@@ -65,7 +65,7 @@ async def generate_quiz(
     """
     yield ("progress", "Fetching document chunks...")
 
-    filter_query = {"user_id": user_id, "collection_name": collection_name}
+    filter_query = {"user_id": user_id, "project_name": project_name}
     if file_scope:
         filter_query["metadata.source"] = {"$in": file_scope}
 
@@ -264,7 +264,7 @@ async def quiz_explain_pipeline(
     option_b: str,
     option_c: str,
     option_d: str,
-    collection_name: str,
+    project_name: str,
     user_id: str,
     messages: list[ChatMessageHistory] | None = None,
     top_k: int | None = None,
@@ -369,7 +369,7 @@ Respond naturally and conversationally. Keep it brief."""
 
     # Vector search for real questions
     top_k = top_k or settings.top_k
-    pre_filter = {"user_id": user_id, "collection_name": collection_name}
+    pre_filter = {"user_id": user_id, "project_name": project_name}
 
     vectorstore = mongodb.get_vectorstore(embedding_model)
     docs = await vectorstore.asimilarity_search(question, k=top_k, pre_filter=pre_filter)

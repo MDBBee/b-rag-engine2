@@ -20,6 +20,7 @@ class Settings(BaseSettings):
         "openai/gpt-4o-mini",
         "qwen/qwen3.7-flash",
         "nvidia/nemotron-3.5-super-vl:free",
+        "openrouter/free"
     ]
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     mongodb_uri: str = ""
@@ -39,6 +40,8 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     vision_model: str = ""
     ocr_text_threshold: int = 100
+    auth_enabled: bool = True
+    rate_limit_enabled: bool = True
 
     @property
     def cors_origins_list(self) -> list[str]:

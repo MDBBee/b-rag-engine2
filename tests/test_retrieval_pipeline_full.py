@@ -32,7 +32,7 @@ async def test_retrieval_pipeline_with_graph():
         events = []
         async for event_type, data in retrieval_pipeline(
             query="What is this about?",
-            collection_name="test-collection",
+            project_name="test-collection",
             user_id="user-123",
             messages=[]
         ):
@@ -65,7 +65,7 @@ async def test_retrieval_pipeline_with_messages():
         events = []
         async for event_type, data in retrieval_pipeline(
             query="Follow up",
-            collection_name="test-collection",
+            project_name="test-collection",
             user_id="user-123",
             messages=messages
         ):
@@ -105,7 +105,7 @@ async def test_retrieval_pipeline_ollama_provider():
         events = []
         async for event_type, data in retrieval_pipeline(
             query="Test query",
-            collection_name="test-collection",
+            project_name="test-collection",
             user_id="user-123",
             llm_provider="ollama",
             llm_model="llama2",
@@ -120,7 +120,7 @@ async def test_retrieval_pipeline_ollama_no_model():
     events = []
     async for event_type, data in retrieval_pipeline(
         query="Test query",
-        collection_name="test-collection",
+        project_name="test-collection",
         user_id="user-123",
         llm_provider="ollama",
         llm_model=None,

@@ -6,15 +6,17 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from app.config import settings
+from app.limiter import limiter
 from app.routers import (
     collections,
     file_processing,
     ingestion,
     quiz,
     retrieval,
-    summaries,
     youtube_ingest,
 )
 from app.utils.mongodb import close_mongodb, init_mongodb
@@ -30,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if not settings.auth_secret:
+    if settings.auth_enabled and not settings.auth_secret:
         raise RuntimeError("AUTH_SECRET is required but not configured")
     await init_mongodb()
     init_graph()
@@ -39,6 +41,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="b-rag-engine2", version="0.1.0", lifespan=lifespan)
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -69,7 +74,6 @@ app.include_router(retrieval.router)
 app.include_router(collections.router)
 app.include_router(file_processing.router)
 app.include_router(quiz.router)
-app.include_router(summaries.router)
 
 
 @app.get("/health")

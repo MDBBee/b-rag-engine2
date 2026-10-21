@@ -35,13 +35,12 @@ class ChatMessageHistory(BaseModel):
 
 class QueryRequest(BaseModel):
     query: str
-    collection_name: str
+    project_name: str
     file_scope: list[str] | None = Field(default=None)
     llm_provider: str | None = Field(default=None)
     llm_model: str | None = Field(default=None)
     top_k: int | None = Field(default=None)
     messages: list[ChatMessageHistory] = Field(default_factory=list)
-    project_name: str | None = Field(default=None)
     file_name: str | None = Field(default=None)
     max_retries: int | None = Field(default=None, ge=0, le=3)
     embedding_model: str | None = Field(default=None)
@@ -61,13 +60,14 @@ class QueryResponse(BaseModel):
 class DocumentInfo(BaseModel):
     name: str
     type: str
+    chunk_count: int = 0
+    uploaded_at: datetime | None = None
 
 
 class CollectionInfo(BaseModel):
-    collection_name: str
+    project_name: str
     name: str | None = None
-    file_name: list[str] = Field(default_factory=list)
-    document_type: list[DocumentInfo] = Field(default_factory=list)
+    documents: list[DocumentInfo] = Field(default_factory=list)
     chunk_count: int
     created_at: datetime
 
@@ -83,13 +83,13 @@ class ChunkResponse(BaseModel):
 
 
 class CollectionChunksResponse(BaseModel):
-    collection_name: str
+    project_name: str
     chunk_count: int
     chunks: list[ChunkResponse] = Field(default_factory=list)
 
 
 class QuizRequest(BaseModel):
-    collection_name: str
+    project_name: str
     file_scope: list[str] | None = Field(default=None)
     llm_provider: str | None = Field(default=None)
     llm_model: str | None = Field(default=None)
@@ -114,7 +114,7 @@ class QuizExplainRequest(BaseModel):
     option_b: str
     option_c: str
     option_d: str
-    collection_name: str
+    project_name: str
     llm_provider: str | None = Field(default=None)
     llm_model: str | None = Field(default=None)
     top_k: int | None = Field(default=None)
@@ -129,19 +129,3 @@ class SummaryExportRequest(BaseModel):
     """Request to export a summary as PDF or Markdown."""
     markdown_text: str = Field(..., min_length=1)
     title: str = Field(default="Summary", max_length=200)
-
-
-class SummarySaveRequest(BaseModel):
-    """Request to save a summary to MongoDB."""
-    collection_name: str
-    markdown_text: str = Field(..., min_length=1)
-    title: str | None = Field(default=None, max_length=200)
-
-
-class SummaryResponse(BaseModel):
-    """Response model for a saved summary."""
-    id: str
-    collection_name: str
-    title: str
-    summary_markdown: str
-    created_at: datetime

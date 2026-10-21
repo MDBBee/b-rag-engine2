@@ -33,7 +33,7 @@ async def test_ingestion_pipeline_success():
         result = await ingestion_pipeline(
             file_path="test.txt",
             filename="test.txt",
-            collection_name="test-collection",
+            project_name="test-collection",
             user_id="user-123"
         )
         
@@ -47,10 +47,14 @@ async def test_ingestion_pipeline_success():
         mock_create_project.assert_called_once_with(
             user_id="user-123",
             name="test.txt",
-            collection_name="test-collection",
-            file_name=["test.txt"],
+            project_name="test-collection",
+            documents=[{
+                "name": "test.txt",
+                "type": "txt",
+                "chunk_count": 1,
+                "uploaded_at": mock_create_project.call_args.kwargs["documents"][0]["uploaded_at"],
+            }],
             chunk_count=1,
-            document_type=[{"name": "test.txt", "type": "txt"}],
         )
 
 
@@ -64,9 +68,8 @@ async def test_ingestion_pipeline_append():
         mock_mongodb.vectors.count_documents = AsyncMock(return_value=5)
         mock_mongodb.projects.find_one = AsyncMock(return_value={
             "user_id": "user-123",
-            "collection_name": "test-collection",
-            "file_name": ["chapter1.txt"],  # file_name should be a list
-            "document_type": [{"name": "chapter1.txt", "type": "txt"}],
+            "project_name": "test-collection",
+            "documents": [{"name": "chapter1.txt", "type": "txt", "chunk_count": 5}],
             "chunk_count": 5,
         })
         mock_mongodb.projects.update_one = AsyncMock()
@@ -92,7 +95,7 @@ async def test_ingestion_pipeline_append():
         result = await ingestion_pipeline(
             file_path="chapter2.txt",
             filename="chapter2.txt",
-            collection_name="test-collection",
+            project_name="test-collection",
             user_id="user-123"
         )
         
@@ -106,10 +109,10 @@ async def test_ingestion_pipeline_append():
         # Verify project was updated (not created)
         mock_mongodb.projects.update_one.assert_called_once()
         update_filter, update_ops = mock_mongodb.projects.update_one.call_args[0]
-        assert update_filter == {"user_id": "user-123", "collection_name": "test-collection"}
+        assert update_filter == {"user_id": "user-123", "project_name": "test-collection"}
         assert update_ops["$set"]["chunk_count"] == 6
-        assert "chapter1.txt" in update_ops["$set"]["file_name"]
-        assert "chapter2.txt" in update_ops["$set"]["file_name"]
+        assert "$push" in update_ops
+        assert update_ops["$push"]["documents"]["name"] == "chapter2.txt"
 
 
 async def test_ingestion_pipeline_pdf_detection():
@@ -150,7 +153,7 @@ async def test_ingestion_pipeline_pdf_detection():
         result = await ingestion_pipeline(
             file_path="test.pdf",
             filename="test.pdf",
-            collection_name="test-collection",
+            project_name="test-collection",
             user_id="user-123"
         )
         
@@ -185,7 +188,7 @@ async def test_ingestion_pipeline_metadata_enrichment():
         await ingestion_pipeline(
             file_path="test.txt",
             filename="document.pdf",
-            collection_name="test-collection",
+            project_name="test-collection",
             user_id="user-123"
         )
         
