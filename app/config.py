@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     ocr_text_threshold: int = 100
     auth_enabled: bool = True
     rate_limit_enabled: bool = True
+    tavily_api_key: str = ""
+    web_search_enabled: bool = True
 
     @property
     def cors_origins_list(self) -> list[str]:

@@ -26,6 +26,8 @@ NODE_EVENT_MAP = {
     "rephrase_query": ("rephrasing", "Rephrasing query..."),
     "generate": ("generating", "Generating answer..."),
     "generate_direct": ("generating", "Generating answer..."),
+    "web_research": ("searching", "Searching the web..."),
+    "generate_with_web_context": ("generating", "Generating answer..."),
 }
 
 
@@ -66,6 +68,8 @@ async def query_stream(
                 yield ServerSentEvent(raw_data=json.dumps({"type": "token", "content": data}))
             elif event_type == "sources":
                 yield ServerSentEvent(raw_data=json.dumps({"type": "sources", "sources": data}))
+            elif event_type == "web_sources":
+                yield ServerSentEvent(raw_data=json.dumps({"type": "web_sources", "sources": data}))
             elif event_type == "usage":
                 yield ServerSentEvent(raw_data=json.dumps({"type": "usage", "usage": data}))
             elif event_type == "done":

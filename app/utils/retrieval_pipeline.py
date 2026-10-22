@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from app.config import settings
 from app.typing.schemas import ChatMessageHistory
 from app.utils import mongodb
+from app.utils.web_search import web_search
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +35,8 @@ def get_compiled_graph():
 
 class IntentDecision(BaseModel):
     """Classification of query intent."""
-    intent: Literal["casual", "summary", "specific"] = Field(
-        description="casual: greetings/chat, summary: overview/main points, specific: targeted question"
+    intent: Literal["casual", "summary", "specific", "research"] = Field(
+        description="casual: greetings/chat, summary: overview/main points, specific: targeted question, research: explicit request for web search"
     )
 
 
@@ -56,6 +57,7 @@ class RAGState(TypedDict):
     file_scope: list[str] | None
     embedding_model: str | None
     usage_metadata: dict | None
+    web_sources: list[dict] | None
 
 
 async def classify_intent(state: RAGState) -> dict:
@@ -75,7 +77,7 @@ async def classify_intent(state: RAGState) -> dict:
         logger.info("classify_intent: invoking structured LLM with json_mode...")
         
         result = await structured_llm.ainvoke([
-            SystemMessage(content="""Classify the user's query. Respond in JSON format with {"intent": "casual"|"summary"|"specific"}.
+            SystemMessage(content="""Classify the user's query. Respond in JSON format with {"intent": "casual"|"summary"|"specific"|"research"}.
 
 CASUAL: greetings, thanks, general chat, time/date questions, meta-questions about the assistant
 - Examples: "hi", "hello", "how are you", "what's today's date", "thanks", "good morning"
@@ -86,7 +88,10 @@ SUMMARY: requests for overview, main points, comprehensive coverage
 SPECIFIC: targeted question about document content or concepts
 - Examples: "what does X mean", "explain the methodology", "tell me about the author's argument"
 
-IMPORTANT: If the query asks for ANY kind of overview or comprehensive coverage, classify as SUMMARY. When in doubt between summary and specific, choose SPECIFIC."""),
+RESEARCH: explicit requests for web search, external information, comparisons with outside sources, or finding images/diagrams/tables not in the documents
+- Examples: "search the web for", "find online", "compare with external sources", "find images of", "look up on the internet", "what does the web say about", "find recent news about"
+
+IMPORTANT: If the query asks for ANY kind of overview or comprehensive coverage, classify as SUMMARY. When in doubt between summary and specific, choose SPECIFIC. Only classify as RESEARCH if the user explicitly asks to search the web or find information online."""),
             HumanMessage(content=query),
         ])
 
@@ -271,6 +276,90 @@ Never concatenate multiple lines together. Keep cells concise (under 20 words).
     return {"messages": [response], "usage_metadata": usage_metadata}
 
 
+async def web_research(state: RAGState) -> dict:
+    """Perform web search via Tavily."""
+    query = state.get("current_query") or state["messages"][-1].content
+    logger.info("web_research: query=%s", query[:100])
+
+    try:
+        results = await web_search(query)
+    except Exception:
+        logger.exception("web_research failed")
+        return {"context": "", "web_sources": []}
+
+    context_parts = []
+    web_sources = []
+
+    if results.get("answer"):
+        context_parts.append(f"[Web Summary]\n{results['answer']}")
+
+    images = results.get("images", [])
+
+    for i, r in enumerate(results.get("results", []), 1):
+        context_parts.append(
+            f"[Source {i}: {r.get('title', 'Unknown')}]\n"
+            f"URL: {r.get('url', '')}\n"
+            f"{r.get('content', '')}"
+        )
+        web_sources.append({
+            "title": r.get("title", ""),
+            "url": r.get("url", ""),
+            "preview": r.get("content", "")[:200],
+            "imageUrl": images[i - 1] if i - 1 < len(images) else None,
+        })
+
+    return {
+        "context": "\n\n---\n\n".join(context_parts),
+        "retrieved_docs": [],
+        "web_sources": web_sources,
+    }
+
+
+async def generate_with_web_context(state: RAGState) -> dict:
+    """Generate answer using web search results."""
+    messages = state["messages"]
+    llm = state["llm"]
+    today = datetime.now(tz=UTC).strftime("%B %d, %Y")
+
+    system_prompt = f"""You are a helpful research assistant. Today's date is {today}.
+Provide a comprehensive answer based on the web search results below.
+
+Guidelines:
+- Cite sources by title or URL when referencing specific information
+- If images were found, mention them as available references
+- Organize information logically with markdown formatting
+- Use tables, lists, and code blocks as appropriate
+- Do NOT include apologies, filler phrases, or hedging
+- Do NOT use placeholder letters (A, B, C, D) in tables — write "Data not available" if unknown
+
+Web Search Results:
+{state['context']}"""
+
+    llm_messages = [SystemMessage(content=system_prompt)] + messages
+
+    total_length = sum(len(str(m.content)) for m in llm_messages)
+    logger.info(
+        "generate_with_web_context: model=%s, message_count=%d, total_length=%d, context_length=%d",
+        getattr(llm, 'model', 'unknown'), len(llm_messages), total_length, len(state['context'])
+    )
+
+    try:
+        response = await llm.ainvoke(llm_messages)
+        logger.info("generate_with_web_context: success, response_length=%d", len(response.content))
+        usage_metadata = getattr(response, 'usage_metadata', None)
+        if usage_metadata:
+            logger.info("generate_with_web_context: token_usage=%s", usage_metadata)
+    except Exception as e:
+        logger.exception("generate_with_web_context failed: model=%s", getattr(llm, 'model', 'unknown'))
+        if hasattr(e, 'status_code'):
+            logger.error("generate_with_web_context: HTTP status=%s", e.status_code)
+        if hasattr(e, 'body'):
+            logger.error("generate_with_web_context: error_body=%s", e.body)
+        raise
+
+    return {"messages": [response], "usage_metadata": usage_metadata}
+
+
 async def generate(state: RAGState) -> dict:
     """Generate answer with document context."""
     intent = state["intent"]
@@ -364,13 +453,15 @@ Context:
     return {"messages": [response], "usage_metadata": usage_metadata}
 
 
-def intent_router(state: RAGState) -> Literal["generate_direct", "retrieve_all", "retrieve_top_k"]:
+def intent_router(state: RAGState) -> Literal["generate_direct", "retrieve_all", "retrieve_top_k", "web_research"]:
     """Route based on classified intent."""
     intent = state["intent"]
     if intent == "casual":
         return "generate_direct"
     elif intent == "summary":
         return "retrieve_all"
+    elif intent == "research":
+        return "web_research"
     return "retrieve_top_k"
 
 
@@ -393,11 +484,15 @@ def build_graph():
     graph.add_node("retrieve_all", retrieve_all)
     graph.add_node("retrieve_top_k", retrieve_top_k)
     graph.add_node("generate", generate)
+    graph.add_node("web_research", web_research)
+    graph.add_node("generate_with_web_context", generate_with_web_context)
 
     graph.add_edge(START, "classify_intent")
-    graph.add_conditional_edges("classify_intent", intent_router, ["generate_direct", "retrieve_all", "retrieve_top_k"])
+    graph.add_conditional_edges("classify_intent", intent_router, ["generate_direct", "retrieve_all", "retrieve_top_k", "web_research"])
     graph.add_edge("retrieve_all", "generate")
     graph.add_edge("generate_direct", END)
+    graph.add_edge("web_research", "generate_with_web_context")
+    graph.add_edge("generate_with_web_context", END)
 
     if settings.rephrase_enabled:
         graph.add_node("rephrase_query", rephrase_query_node)
@@ -473,10 +568,11 @@ async def retrieval_pipeline(
         "file_scope": file_scope,
         "embedding_model": embedding_model,
         "usage_metadata": None,
+        "web_sources": None,
     }
 
     sources_yielded = False
-    node_names = {"classify_intent", "retrieve_all", "retrieve_top_k", "rephrase_query", "generate_direct", "generate"}
+    node_names = {"classify_intent", "retrieve_all", "retrieve_top_k", "rephrase_query", "generate_direct", "generate", "web_research", "generate_with_web_context"}
 
     try:
         async for event in rag_pipeline.astream_events(
@@ -492,7 +588,7 @@ async def retrieval_pipeline(
                 yield ("node_start", node_name)
 
             elif event_type == "on_chat_model_stream":
-                if node_name in ("generate", "generate_direct"):
+                if node_name in ("generate", "generate_direct", "generate_with_web_context"):
                     chunk = event["data"].get("chunk")
                     if chunk and chunk.content:
                         if not sources_yielded:
@@ -523,7 +619,14 @@ async def retrieval_pipeline(
                         yield ("sources", sources)
                         sources_yielded = True
 
-            elif event_type == "on_chain_end" and node_name in ("generate", "generate_direct"):
+            elif event_type == "on_chain_end" and node_name == "web_research":
+                output = event.get("data", {}).get("output", {})
+                if isinstance(output, dict):
+                    web_sources = output.get("web_sources", [])
+                    if web_sources:
+                        yield ("web_sources", web_sources)
+
+            elif event_type == "on_chain_end" and node_name in ("generate", "generate_direct", "generate_with_web_context"):
                 output = event.get("data", {}).get("output", {})
                 if isinstance(output, dict):
                     usage_metadata = output.get("usage_metadata")
