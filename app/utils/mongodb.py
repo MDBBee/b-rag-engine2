@@ -300,9 +300,17 @@ async def delete_project_full(user_id: str, project_name: str) -> dict:
     return {"deleted_vectors": vec_result.deleted_count, "found": True}
 
 
-async def get_collection_chunks(user_id: str, project_name: str) -> dict:
-    """Fetch all chunks for a project."""
-    cursor = vectors.find({"user_id": user_id, "project_name": project_name}).sort("chunk_index", 1)
+async def get_collection_chunks(
+    user_id: str,
+    project_name: str,
+    file_scope: list[str] | None = None,
+) -> dict:
+    """Fetch all chunks for a project, optionally filtered by file_scope."""
+    filter_query = {"user_id": user_id, "project_name": project_name}
+    if file_scope:
+        filter_query["metadata.source"] = {"$in": file_scope}
+
+    cursor = vectors.find(filter_query).sort("chunk_index", 1)
 
     chunks = []
     async for doc in cursor:

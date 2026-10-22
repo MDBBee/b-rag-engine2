@@ -95,9 +95,10 @@ async def extract_text_by_page(file_path: str, use_ocr: bool | None = None) -> l
                     llm_client=client,
                     llm_model=settings.vision_model or settings.llm_model,
                 )
+                ocr_timeout = max(settings.ocr_timeout, total_images * 20.0)
                 result = await asyncio.wait_for(
                     asyncio.to_thread(md.convert, file_path),
-                    timeout=120.0
+                    timeout=ocr_timeout
                 )
                 if result.text_content and result.text_content.strip():
                     logger.info(f"OCR successfully extracted {len(result.text_content)} chars from scanned PDF")
@@ -106,8 +107,8 @@ async def extract_text_by_page(file_path: str, use_ocr: bool | None = None) -> l
                     logger.warning(f"OCR failed to extract text from scanned PDF: {file_path}")
                     return []
             except TimeoutError:
-                logger.warning(f"OCR timed out after 120 seconds for {file_path}")
-                return []
+                logger.warning(f"OCR timed out after {ocr_timeout} seconds for {file_path}")
+                raise ValueError(f"OCR processing timed out after {int(ocr_timeout)} seconds. The document has {total_images} images which may require extended processing time.")
             except Exception:
                 logger.exception(f"OCR failed for {file_path}")
                 return []

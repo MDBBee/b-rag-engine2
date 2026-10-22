@@ -20,7 +20,7 @@ class Settings(BaseSettings):
         "openai/gpt-4o-mini",
         "qwen/qwen3.7-flash",
         "nvidia/nemotron-3.5-super-vl:free",
-        "minimax/minimax-m3.1-flash:free",
+        "cohere/north-mini-code:free",
         "google/gemma-4-26b-a4b-it:free",
         "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
         "openrouter/free",
@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     rate_limit_enabled: bool = True
     tavily_api_key: str = ""
     web_search_enabled: bool = True
+    ocr_timeout: int = 300
 
     @property
     def cors_origins_list(self) -> list[str]:
@@ -54,3 +55,15 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+    "openai/gpt-4o-mini": 128_000,
+    "qwen/qwen3.7-flash": 1_000_000,
+    "nvidia/nemotron-3.5-super-vl:free": 1_000_000,
+    "cohere/north-mini-code:free": 256_000,
+    "google/gemma-4-26b-a4b-it:free": 256_000,
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": 256_000,
+    "openrouter/free": 128_000,
+    "text-embedding-3-small": 8_191,
+    "qwen/qwen3-embedding-8b": 32_000,
+}

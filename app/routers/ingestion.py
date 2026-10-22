@@ -46,11 +46,11 @@ async def ingest_stream(
     text_splitter: str | None = Form(None),
     embedding_model: str | None = Form(None),
     force_reprocess: bool = Form(False),
-    use_ocr: bool = Form(False),
+    use_ocr: bool | None = Form(None),
     user: UserInfo = Depends(get_current_user),
 ) -> AsyncIterable[ServerSentEvent]:
     """Streaming ingestion endpoint. Returns SSE events with progress updates."""
-    if use_ocr and user.role != "admin":
+    if use_ocr is True and user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin role required for OCR")
 
     tmp_path = await save_temp_with_limit(file, settings.max_ingest_file_size)

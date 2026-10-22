@@ -1,4 +1,5 @@
 import logging
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query
 
@@ -71,10 +72,17 @@ async def get_collection_metadata(project_name: str, user: UserInfo = Depends(ge
 
 
 @router.get("/{project_name}/chunks", response_model=CollectionChunksResponse)
-async def get_chunks(project_name: str, user: UserInfo = Depends(get_current_user)):
-    """Fetch all chunks for a collection (for visualization page)."""
+async def get_chunks(
+    project_name: str,
+    file_name: Annotated[list[str] | None, Query()] = None,
+    user: UserInfo = Depends(get_current_user),
+):
+    """Fetch all chunks for a collection (for visualization page).
+    
+    Use file_name to filter by specific documents (repeat param: ?file_name=a&file_name=b).
+    """
     try:
-        result = await get_collection_chunks(user.id, project_name)
+        result = await get_collection_chunks(user.id, project_name, file_scope=file_name)
         if result["chunk_count"] == 0:
             raise HTTPException(status_code=404, detail=f"Collection '{project_name}' not found")
         return result

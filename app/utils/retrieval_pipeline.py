@@ -77,21 +77,33 @@ async def classify_intent(state: RAGState) -> dict:
         logger.info("classify_intent: invoking structured LLM with json_mode...")
         
         result = await structured_llm.ainvoke([
-            SystemMessage(content="""Classify the user's query. Respond in JSON format with {"intent": "casual"|"summary"|"specific"|"research"}.
+            SystemMessage(content="""Classify the user's query into exactly one category. Respond in JSON: {"intent": "casual"|"summary"|"specific"|"research"}
 
-CASUAL: greetings, thanks, general chat, time/date questions, meta-questions about the assistant
-- Examples: "hi", "hello", "how are you", "what's today's date", "thanks", "good morning"
+CASUAL: greetings, thanks, conversational chat
+- "hi", "hello", "thanks", "how are you", "good morning"
 
-SUMMARY: requests for overview, main points, comprehensive coverage
-- Examples: "summarize this", "give me an overview", "what are the main points", "what's in this document"
+SUMMARY: requests to summarize UPLOADED DOCUMENTS
+- "summarize the document", "overview of the files", "main points", "what's in this document"
 
-SPECIFIC: targeted question about document content or concepts
-- Examples: "what does X mean", "explain the methodology", "tell me about the author's argument"
+SPECIFIC: questions about UPLOADED DOCUMENTS or STATIC knowledge (unchanging facts)
+- Document content: "what does the thesis say about X?", "explain the methodology from the document"
+- Definitions: "what is photosynthesis?", "explain quantum mechanics"
+- Historical facts: "when was WWII?", "who was Einstein?"
+- Scientific concepts: "how does gravity work?", "what is pi?"
+- Fixed knowledge that doesn't change over time
 
-RESEARCH: explicit requests for web search, external information, comparisons with outside sources, or finding images/diagrams/tables not in the documents
-- Examples: "search the web for", "find online", "compare with external sources", "find images of", "look up on the internet", "what does the web say about", "find recent news about"
+RESEARCH: questions requiring CURRENT/REAL-TIME information or EXPLICIT web search
+- Explicit requests: "search the web", "find online", "look up", "what does the internet say", "compare with external sources"
+- Time-sensitive words: "today", "now", "current", "latest", "2026", "recent", "this week", "yesterday"
+- Real-time data: weather, stock prices, sports scores, availability, schedules, enrollment
+- Current state of entities: "does VAMK have a nursing program?", "is X available?", "current prices", "enrollment deadlines", "what programs does [institution] offer?"
+- News/current events: "latest news about", "what happened recently", "who won the game"
 
-IMPORTANT: If the query asks for ANY kind of overview or comprehensive coverage, classify as SUMMARY. When in doubt between summary and specific, choose SPECIFIC. Only classify as RESEARCH if the user explicitly asks to search the web or find information online."""),
+CRITICAL RULE: Use the TIME TEST - "Would the answer be DIFFERENT if asked in 2023 vs 2026?"
+- YES (weather, programs, prices, availability, current events, schedules) → RESEARCH
+- NO (definitions, historical facts, scientific concepts) → SPECIFIC
+
+When in doubt: if the query is about a SPECIFIC entity (school, business, service) and asks about current offerings/availability/status, choose RESEARCH because this information changes over time."""),
             HumanMessage(content=query),
         ])
 
