@@ -85,12 +85,17 @@ def get_embeddings(model: str | None = None) -> OpenAIEmbeddings:
         raise ValueError(f"Model '{model_name}' not in allowed embedding models: {settings.allowed_embedding_models}")
     
     if model_name not in _embeddings_cache:
-        _embeddings_cache[model_name] = OpenAIEmbeddings(
-            model=model_name,
-            dimensions=1536,  # All models use 1536 dimensions for compatibility
-            openai_api_key=settings.openrouter_api_key,
-            openai_api_base=settings.openrouter_base_url,
-        )
+        kwargs = {
+            "model": model_name,
+            "openai_api_key": settings.openrouter_api_key,
+            "openai_api_base": settings.openrouter_base_url,
+        }
+        if "text-embedding-3" in model_name:
+            kwargs["dimensions"] = 1536
+        else:
+            kwargs["check_embedding_ctx_length"] = False
+        
+        _embeddings_cache[model_name] = OpenAIEmbeddings(**kwargs)
     
     return _embeddings_cache[model_name]
 
@@ -275,6 +280,22 @@ async def delete_collection_cascade(user_id: str, project_name: str) -> dict:
     )
     
     logger.info("Clear vectors: user=%s project=%s vectors=%d", user_id, project_name, vec_result.deleted_count)
+    
+    return {"deleted_vectors": vec_result.deleted_count, "found": True}
+
+
+async def delete_project_full(user_id: str, project_name: str) -> dict:
+    """Delete all vectors AND the project metadata for a project."""
+    project = await projects.find_one({"user_id": user_id, "project_name": project_name})
+    
+    if not project:
+        return {"deleted_vectors": 0, "found": False}
+    
+    vec_result = await vectors.delete_many({"user_id": user_id, "project_name": project_name})
+    
+    await projects.delete_one({"user_id": user_id, "project_name": project_name})
+    
+    logger.info("Full delete: user=%s project=%s vectors=%d", user_id, project_name, vec_result.deleted_count)
     
     return {"deleted_vectors": vec_result.deleted_count, "found": True}
 

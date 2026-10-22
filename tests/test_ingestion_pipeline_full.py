@@ -46,7 +46,7 @@ async def test_ingestion_pipeline_success():
         assert len(summarized) == 1
         mock_create_project.assert_called_once_with(
             user_id="user-123",
-            name="test.txt",
+            name="test-collection",
             project_name="test-collection",
             documents=[{
                 "name": "test.txt",

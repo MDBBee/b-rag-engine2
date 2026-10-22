@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Form, HTTPException, Query
 
 from app.config import settings
 from app.middleware.auth import UserInfo, get_current_user
@@ -13,6 +13,7 @@ from app.typing.schemas import (
 from app.utils import mongodb
 from app.utils.mongodb import (
     delete_collection_cascade,
+    delete_project_full,
     delete_vectors_by_source,
     get_collection_chunks,
     list_collections,
@@ -166,18 +167,25 @@ async def recalculate_document_tokens(
 
 
 @router.delete("/{project_name}", response_model=CascadeDeleteResponse)
-async def delete_collection(project_name: str, user: UserInfo = Depends(get_current_user)):
-    """Delete all vectors for a collection but keep the project."""
+async def delete_collection(
+    project_name: str,
+    persist_vectors: bool = Form(True),
+    user: UserInfo = Depends(get_current_user),
+):
+    """Delete vectors for a collection. If persist_vectors=false, delete the project entirely."""
     try:
-        result = await delete_collection_cascade(user.id, project_name)
+        if persist_vectors:
+            result = await delete_collection_cascade(user.id, project_name)
+        else:
+            result = await delete_project_full(user.id, project_name)
         if not result["found"]:
             raise HTTPException(status_code=404, detail=f"Collection '{project_name}' not found")
         return result
     except HTTPException:
         raise
     except Exception:
-        logger.exception("Failed to clear collection vectors")
-        raise HTTPException(status_code=500, detail="Failed to clear collection vectors")
+        logger.exception("Failed to delete collection")
+        raise HTTPException(status_code=500, detail="Failed to delete collection")
 
 
 @router.delete("/{project_name}/documents", response_model=CascadeDeleteResponse)

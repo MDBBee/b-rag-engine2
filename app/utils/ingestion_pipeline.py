@@ -241,6 +241,12 @@ async def ingestion_pipeline_stream(
 
         yield ("stage", {"stage": "vectorize"})
 
+        valid_chunks = [c for c in final_chunks if c.page_content.strip()]
+        if not valid_chunks:
+            yield ("error", {"message": "No valid text content to embed"})
+            return
+        final_chunks = valid_chunks
+
         for i, chunk in enumerate(final_chunks):
             chunk.metadata.update({
                 "source": filename,
@@ -322,7 +328,7 @@ async def ingestion_pipeline_stream(
         else:
             await create_project(
                 user_id=user_id,
-                name=filename,
+                name=project_name,
                 project_name=project_name,
                 documents=[{
                     "name": filename,
