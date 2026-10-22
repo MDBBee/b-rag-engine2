@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from app.config import settings
 from app.typing.schemas import ChatMessageHistory, QuizQuestion
 from app.utils import mongodb
+from app.utils.web_search import web_search
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +23,8 @@ class QuizQuestions(BaseModel):
 class QuizIntent(BaseModel):
     """Intent classification for quiz chat messages."""
 
-    intent: Literal["casual", "question"] = Field(
-        description="casual: greetings, thanks, acknowledgments. question: asking for help, explanation, reasoning, or follow-up about the quiz"
+    intent: Literal["casual", "question", "research"] = Field(
+        description="casual: greetings, thanks, acknowledgments. question: asking for help, explanation, reasoning about the quiz using the document. research: explicit request to search the web or look up external information"
     )
 
 
@@ -83,17 +84,13 @@ async def generate_quiz(
         yield ("done", None)
         return
 
-    total_chars = sum(len(c["text"]) for c in all_chunks)
-    estimated_tokens = int(total_chars * 0.75)
-
-    if estimated_tokens > 25000 and len(all_chunks) > 35:
-        step = len(all_chunks) // 35
-        sampled = [all_chunks[i] for i in range(0, len(all_chunks), step)][:35]
-        yield ("progress", f"Sampling {len(sampled)} chunks for quiz generation...")
-        chunks_to_process = sampled
+    max_chunks = settings.max_context_chunks
+    if len(all_chunks) > max_chunks:
+        chunks_to_process = all_chunks[:max_chunks]
+        yield ("progress", f"Using first {len(chunks_to_process)} of {len(all_chunks)} chunks...")
     else:
-        yield ("progress", f"Processing {len(all_chunks)} chunks...")
         chunks_to_process = all_chunks
+        yield ("progress", f"Processing {len(chunks_to_process)} chunks...")
 
     resolved_provider = llm_provider or "openrouter"
 
@@ -133,12 +130,17 @@ Rules:
 - Questions should test understanding, not just recall
 - Vary difficulty across questions
 - Cover different sections/pages of the document
-- When using tables in questions/options, use proper markdown:
-| Column 1 | Column 2 |
-|----------|----------|
-| Data     | Data     |
-- For lists, use: - Item 1\n- Item 2
-- For code, use fenced blocks with language tags
+
+Rich Content (use the rich_content field for these):
+- Include markdown tables when comparing data, presenting structured information, or showing relationships
+- Include mermaid diagrams when visualizing processes, flows, hierarchies, or systems (use ```mermaid code blocks)
+- Use rich_content to provide context that helps the student reason through the question
+- Rich content is optional but strongly encouraged when it adds educational value
+- Keep rich_content concise and relevant to the question
+
+Options formatting:
+- For lists in options, use: - Item 1\\n- Item 2
+- For code in options, use fenced blocks with language tags
 - Never concatenate multiple lines together
 
 Document content:
@@ -319,13 +321,26 @@ async def quiz_explain_pipeline(
     try:
         structured_llm = llm.with_structured_output(QuizIntent, method="json_schema")
         intent_result = await structured_llm.ainvoke([
-            SystemMessage(content="Classify the user's message as 'casual' (greetings, thanks, short acknowledgments) or 'question' (asking for help, explanation, reasoning, or follow-up about the quiz question)."),
+            SystemMessage(content="""Classify the user's message into exactly one category:
+
+CASUAL: greetings, thanks, short acknowledgments
+- "hi", "hello", "thanks", "got it", "okay"
+
+QUESTION: asking for help, explanation, or reasoning about the quiz question using the uploaded document
+- "explain this question", "why is B correct", "help me understand", "what does this mean"
+
+RESEARCH: explicit request to search the web or look up external information beyond the document
+- "search the web", "find online", "look up", "what does the internet say about this"
+- "find more information", "research this topic", "check external sources"
+- Any request that explicitly asks for web/online/external research
+
+Only classify as RESEARCH if the user explicitly asks for web research. Otherwise, default to QUESTION."""),
             HumanMessage(content=latest_user_msg),
         ])
-        is_casual = intent_result.intent == "casual"
+        detected_intent = intent_result.intent
     except Exception:
         logger.warning("Intent classification failed, treating as question", exc_info=True)
-        is_casual = False
+        detected_intent = "question"
 
     # Build message history for LLM
     all_messages = []
@@ -345,7 +360,7 @@ B) {option_b}
 C) {option_c}
 D) {option_d}"""
 
-    if is_casual:
+    if detected_intent == "casual":
         system_prompt = f"""You are a friendly quiz tutor. Today's date is {today}.
 
 The user is having a conversation about this quiz question:
@@ -363,6 +378,64 @@ Respond naturally and conversationally. Keep it brief."""
             yield ("done", None)
         except Exception as e:
             logger.exception("Quiz explain failed")
+            yield ("error", f"Failed to explain: {e}")
+            yield ("done", None)
+        return
+
+    if detected_intent == "research":
+        logger.info("quiz_explain: research intent detected, performing web search")
+        try:
+            search_query = f"{question} {latest_user_msg}"
+            results = await web_search(search_query)
+        except Exception:
+            logger.exception("quiz_explain: web search failed")
+            yield ("error", "Web search failed. Please try again.")
+            yield ("done", None)
+            return
+
+        context_parts = []
+        web_sources = []
+        images = results.get("images", [])
+
+        if results.get("answer"):
+            context_parts.append(f"[Web Summary]\n{results['answer']}")
+
+        for i, r in enumerate(results.get("results", []), 1):
+            context_parts.append(
+                f"[Source {i}: {r.get('title', 'Unknown')}]\n"
+                f"URL: {r.get('url', '')}\n"
+                f"{r.get('content', '')}"
+            )
+            web_sources.append({
+                "chunk_id": str(i),
+                "content_preview": r.get("content", "")[:300],
+                "source": r.get("title", ""),
+            })
+
+        context = "\n\n---\n\n".join(context_parts)
+
+        system_prompt = f"""You are a helpful quiz tutor. Today's date is {today}.
+
+The user is asking about this quiz question and requested external research:
+
+{quiz_context}
+
+User's research request: {latest_user_msg}
+
+{FORMAT_INSTRUCTIONS}
+Provide information based on the web search results below. Cite sources when possible.
+
+Web search results:
+{context}"""
+
+        try:
+            async for chunk in llm.astream([SystemMessage(content=system_prompt)] + all_messages):
+                if chunk.content:
+                    yield ("token", chunk.content)
+            yield ("sources", web_sources)
+            yield ("done", None)
+        except Exception as e:
+            logger.exception("Quiz explain research failed")
             yield ("error", f"Failed to explain: {e}")
             yield ("done", None)
         return

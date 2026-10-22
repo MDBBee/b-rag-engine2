@@ -102,6 +102,7 @@ class QuizRequest(BaseModel):
 
 class QuizQuestion(BaseModel):
     question: str
+    rich_content: str | None = Field(default=None, description="Optional markdown content (tables, mermaid diagrams) to display above the question")
     option_a: str
     option_b: str
     option_c: str
