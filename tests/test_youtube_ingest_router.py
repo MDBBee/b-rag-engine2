@@ -1,9 +1,9 @@
+import json
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.typing.schemas import ChunkData, SummarizedChunk
 
 
 def _mock_transcript_result(video_id="dQw4w9WgXcQ"):
@@ -16,26 +16,38 @@ def _mock_transcript_result(video_id="dQw4w9WgXcQ"):
     }
 
 
-def _mock_ingestion_result():
-    return (
-        3,
-        "youtube",
-        0,
-        0,
-        [ChunkData(text="chunk text", types=["text"])],
-        [SummarizedChunk(page_content="chunk text", metadata={})],
-    )
+async def _mock_stream(*args, **kwargs):
+    yield ("stage", {"stage": "partition"})
+    yield ("done", {
+        "status": "ok",
+        "chunk_count": 3,
+        "document_type": "youtube",
+        "no_of_pages": 0,
+        "first_chunk_index": 0,
+        "last_chunk_index": 2,
+        "chunks": [],
+        "summarized_chunks": [],
+    })
+
+
+def _parse_sse_events(response_text):
+    events = []
+    for line in response_text.strip().split("\n"):
+        line = line.strip()
+        if line.startswith("data: "):
+            events.append(json.loads(line[6:]))
+    return events
 
 
 class TestVideoIdToCollectionName:
     def test_normal_id(self):
-        from app.routers.youtube_ingest import video_id_to_collection_name
-        result = video_id_to_collection_name("dQw4w9WgXcQ")
+        from app.routers.youtube_ingest import video_id_to_project_name
+        result = video_id_to_project_name("dQw4w9WgXcQ")
         assert result == "yt_dqw4w9wgxcq"
 
     def test_long_id_truncated(self):
-        from app.routers.youtube_ingest import video_id_to_collection_name
-        result = video_id_to_collection_name("abcdefghijklm")
+        from app.routers.youtube_ingest import video_id_to_project_name
+        result = video_id_to_project_name("abcdefghijklm")
         assert len(result) <= 40
 
 
@@ -62,18 +74,18 @@ class TestIngestYoutube:
             new_callable=AsyncMock,
             return_value=_mock_transcript_result(),
         ), patch(
-            "app.routers.youtube_ingest.ingestion_pipeline",
-            new_callable=AsyncMock,
-            return_value=_mock_ingestion_result(),
+            "app.routers.youtube_ingest.ingestion_pipeline_stream",
+            side_effect=_mock_stream,
         ):
             response = client.post(
                 "/ingest/youtube",
                 json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
             )
             assert response.status_code == 200
-            data = response.json()
-            assert data["status"] == "ok"
-            assert data["document_type"] == "youtube"
+            events = _parse_sse_events(response.text)
+            done_events = [e for e in events if e["type"] == "done"]
+            assert len(done_events) == 1
+            assert done_events[0]["document_type"] == "youtube"
 
     def test_transcript_disabled_returns_422(self, client):
         with patch(
@@ -128,19 +140,3 @@ class TestIngestYoutube:
                 json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
             )
             assert response.status_code == 503
-
-    def test_collection_conflict_returns_409(self, client):
-        with patch(
-            "app.routers.youtube_ingest.fetch_transcript_with_retry",
-            new_callable=AsyncMock,
-            return_value=_mock_transcript_result(),
-        ), patch(
-            "app.routers.youtube_ingest.ingestion_pipeline",
-            new_callable=AsyncMock,
-            side_effect=ValueError("Collection already exists"),
-        ):
-            response = client.post(
-                "/ingest/youtube",
-                json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
-            )
-            assert response.status_code == 409

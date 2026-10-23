@@ -11,7 +11,20 @@ class Settings(BaseSettings):
 
     openrouter_api_key: str = ""
     embedding_model: str = "text-embedding-3-small"
+    allowed_embedding_models: list[str] = [
+        "text-embedding-3-small",
+        "qwen/qwen3-embedding-8b",
+    ]
     llm_model: str = "openai/gpt-4o-mini"
+    allowed_models: list[str] = [
+        "openai/gpt-4o-mini",
+        "qwen/qwen3.7-flash",
+        "nvidia/nemotron-3.5-super-vl:free",
+        "cohere/north-mini-code:free",
+        "google/gemma-4-26b-a4b-it:free",
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+        "openrouter/free",
+    ]
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     mongodb_uri: str = ""
     mongodb_database: str = "b-rag"
@@ -30,6 +43,11 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     vision_model: str = ""
     ocr_text_threshold: int = 100
+    auth_enabled: bool = True
+    rate_limit_enabled: bool = True
+    tavily_api_key: str = ""
+    web_search_enabled: bool = True
+    ocr_timeout: int = 300
 
     @property
     def cors_origins_list(self) -> list[str]:
@@ -37,3 +55,15 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+    "openai/gpt-4o-mini": 128_000,
+    "qwen/qwen3.7-flash": 1_000_000,
+    "nvidia/nemotron-3.5-super-vl:free": 1_000_000,
+    "cohere/north-mini-code:free": 256_000,
+    "google/gemma-4-26b-a4b-it:free": 256_000,
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": 256_000,
+    "openrouter/free": 128_000,
+    "text-embedding-3-small": 8_191,
+    "qwen/qwen3-embedding-8b": 32_000,
+}

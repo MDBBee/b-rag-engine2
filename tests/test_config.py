@@ -27,6 +27,14 @@ def test_default_values():
     assert settings.chunk_overlap == 200
     assert settings.top_k == 5
     assert settings.max_ingest_file_size == 50 * 1024 * 1024
+    assert len(settings.allowed_models) == 7
+    assert "openai/gpt-4o-mini" in settings.allowed_models
+    assert "qwen/qwen3.7-flash" in settings.allowed_models
+    assert "nvidia/nemotron-3.5-super-vl:free" in settings.allowed_models
+    assert "cohere/north-mini-code:free" in settings.allowed_models
+    assert "google/gemma-4-26b-a4b-it:free" in settings.allowed_models
+    assert "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free" in settings.allowed_models
+    assert "openrouter/free" in settings.allowed_models
 
 
 def test_env_override(monkeypatch):

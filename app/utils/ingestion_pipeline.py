@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -12,10 +13,11 @@ from langchain_text_splitters import (
 from markitdown import MarkItDown
 
 from app.config import settings
-from app.typing.schemas import ChunkData, SummarizedChunk
+from app.typing.schemas import ChunkData, IngestResponse, SummarizedChunk
 from app.utils import mongodb
 from app.utils.mongodb import create_project
 from app.utils.text_splitters import get_splitter
+from app.utils.token_counter import count_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +47,7 @@ def get_page_count(file_path: str) -> int:
         return 0
 
 
-async def extract_text_by_page(file_path: str) -> list[dict]:
+async def extract_text_by_page(file_path: str, use_ocr: bool | None = None) -> list[dict]:
     """Extract text per page for PDFs/DOCX/PPTX. Returns list of {text, page_number}.
     
     For PDFs: Extract directly with pymupdf
@@ -76,8 +78,8 @@ async def extract_text_by_page(file_path: str) -> list[dict]:
             f"PDF extraction: {total_text_length} chars of text, {total_images} images found in {file_path}"
         )
         
-        # Trigger OCR if minimal text AND has images (scanned document)
-        if total_text_length < settings.ocr_text_threshold and total_images > 0:
+        should_ocr = use_ocr if use_ocr is not None else (total_text_length < settings.ocr_text_threshold)
+        if should_ocr and total_images > 0:
             logger.info(
                 f"PDF appears to be a scanned document (text < {settings.ocr_text_threshold} chars, has {total_images} images), "
                 f"attempting OCR for: {file_path}"
@@ -93,13 +95,20 @@ async def extract_text_by_page(file_path: str) -> list[dict]:
                     llm_client=client,
                     llm_model=settings.vision_model or settings.llm_model,
                 )
-                result = await asyncio.to_thread(md.convert, file_path)
+                ocr_timeout = max(settings.ocr_timeout, total_images * 20.0)
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(md.convert, file_path),
+                    timeout=ocr_timeout
+                )
                 if result.text_content and result.text_content.strip():
                     logger.info(f"OCR successfully extracted {len(result.text_content)} chars from scanned PDF")
                     return [{"text": result.text_content, "page_number": 1}]
                 else:
                     logger.warning(f"OCR failed to extract text from scanned PDF: {file_path}")
                     return []
+            except TimeoutError:
+                logger.warning(f"OCR timed out after {ocr_timeout} seconds for {file_path}")
+                raise ValueError(f"OCR processing timed out after {int(ocr_timeout)} seconds. The document has {total_images} images which may require extended processing time.")
             except Exception:
                 logger.exception(f"OCR failed for {file_path}")
                 return []
@@ -130,177 +139,291 @@ async def extract_text_by_page(file_path: str) -> list[dict]:
         return [{"text": result.text_content, "page_number": None}]
 
 
+async def ingestion_pipeline_stream(
+    file_path: str | None,
+    filename: str,
+    project_name: str,
+    user_id: str,
+    chunk_size: int | None = None,
+    chunk_overlap: int | None = None,
+    text_splitter: str | None = None,
+    embedding_model: str | None = None,
+    transcript_text: str | None = None,
+    use_ocr: bool | None = None,
+) -> AsyncGenerator[tuple[str, dict], None]:
+    """Streaming ingestion pipeline that yields progress events.
+    
+    Yields:
+        (event_type, data) tuples where event_type is one of:
+        - "stage": data = {"stage": str}
+        - "progress": data = {"percent": float, "stage": str}
+        - "done": data = IngestResponse dict
+        - "error": data = {"message": str}
+    """
+    try:
+        existing_count = await mongodb.vectors.count_documents(
+            {"user_id": user_id, "project_name": project_name}
+        )
+
+        yield ("stage", {"stage": "partition"})
+
+        if transcript_text:
+            document_type = "txt"
+            page_texts = [{"text": transcript_text, "page_number": None}]
+            yield ("progress", {"percent": 50, "stage": "partition"})
+        else:
+            document_type = detect_document_type(file_path)
+            page_texts = await extract_text_by_page(file_path, use_ocr)
+            yield ("progress", {"percent": 100, "stage": "partition"})
+
+        no_of_pages = len([p for p in page_texts if p["page_number"] is not None])
+
+        # Count tokens for the entire document
+        resolved_embedding_model = embedding_model or settings.embedding_model
+        total_token_count = sum(
+            count_tokens(page_data["text"], resolved_embedding_model)
+            for page_data in page_texts
+        )
+
+        resolved_chunk_size = chunk_size if chunk_size is not None else settings.chunk_size
+        resolved_chunk_overlap = chunk_overlap if chunk_overlap is not None else settings.chunk_overlap
+        resolved_splitter = text_splitter or settings.text_splitter
+
+        yield ("stage", {"stage": "chunk"})
+
+        final_chunks = []
+        
+        for page_data in page_texts:
+            page_text = page_data["text"]
+            page_number = page_data["page_number"]
+            
+            if resolved_splitter == "markdown_header":
+                header_splitter = MarkdownHeaderTextSplitter(
+                    headers_to_split_on=[("#", "H1"), ("##", "H2"), ("###", "H3")]
+                )
+                header_chunks = header_splitter.split_text(page_text)
+
+                recursive_splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=resolved_chunk_size,
+                    chunk_overlap=resolved_chunk_overlap,
+                    length_function=len,
+                    separators=["\n\n", "\n", " ", ""],
+                )
+
+                page_chunks = []
+                for chunk in header_chunks:
+                    if len(chunk.page_content) > settings.oversized_threshold:
+                        sub_chunks = recursive_splitter.split_documents([chunk])
+                        page_chunks.extend(sub_chunks)
+                    else:
+                        page_chunks.append(chunk)
+
+            else:
+                splitter = get_splitter(resolved_splitter, resolved_chunk_size, resolved_chunk_overlap)
+                split_result = splitter.split_text(page_text)
+                
+                if hasattr(split_result[0], 'page_content'):
+                    page_chunks = split_result
+                else:
+                    from langchain_core.documents import Document
+                    page_chunks = [Document(page_content=text) for text in split_result]
+            
+            for chunk in page_chunks:
+                chunk.metadata["page_number"] = page_number
+            
+            final_chunks.extend(page_chunks)
+        
+        if not final_chunks:
+            logger.warning("Text splitter produced zero chunks for: %s", filename)
+            yield ("error", {"message": "Document produced no content after splitting"})
+            return
+
+        yield ("progress", {"percent": 100, "stage": "chunk"})
+
+        yield ("stage", {"stage": "vectorize"})
+
+        valid_chunks = [c for c in final_chunks if c.page_content.strip()]
+        if not valid_chunks:
+            yield ("error", {"message": "No valid text content to embed"})
+            return
+        final_chunks = valid_chunks
+
+        for i, chunk in enumerate(final_chunks):
+            chunk.metadata.update({
+                "source": filename,
+                "chunk_index": existing_count + i,
+                "total_chunks": existing_count + len(final_chunks),
+            })
+
+        texts = [chunk.page_content for chunk in final_chunks]
+
+        for attempt in range(2):
+            try:
+                yield ("progress", {"percent": 20, "stage": "vectorize"})
+                embeddings_instance = mongodb.get_embeddings(embedding_model)
+                embedding_vectors = await asyncio.wait_for(
+                    asyncio.to_thread(embeddings_instance.embed_documents, texts),
+                    timeout=120.0
+                )
+                break
+            except Exception as e:
+                if attempt == 1:
+                    raise
+                logger.warning("Embedding attempt %s failed: %s, retrying...", attempt + 1, e)
+
+        yield ("progress", {"percent": 60, "stage": "vectorize"})
+
+        now = datetime.now(UTC)
+        docs_to_insert = []
+        for i, (chunk, vector) in enumerate(zip(final_chunks, embedding_vectors)):
+            doc = {
+                "user_id": user_id,
+                "project_name": project_name,
+                "chunk_index": existing_count + i,
+                "content": chunk.page_content,
+                "embedding": vector,
+                "metadata": chunk.metadata,
+                "created_at": now,
+            }
+            docs_to_insert.append(doc)
+
+        await mongodb.vectors.insert_many(docs_to_insert)
+
+        yield ("progress", {"percent": 90, "stage": "vectorize"})
+
+        existing_project = await mongodb.projects.find_one(
+            {"user_id": user_id, "project_name": project_name}
+        )
+        
+        if existing_project:
+            documents = existing_project.get("documents", [])
+            existing_doc = next((d for d in documents if d["name"] == filename), None)
+            
+            if existing_doc:
+                await mongodb.projects.update_one(
+                    {"user_id": user_id, "project_name": project_name},
+                    {
+                        "$set": {
+                            "chunk_count": existing_count + len(docs_to_insert),
+                            "documents.$[elem].chunk_count": existing_doc["chunk_count"] + len(docs_to_insert),
+                        },
+                    },
+                    array_filters=[{"elem.name": filename}]
+                )
+            else:
+                new_doc = {
+                    "name": filename,
+                    "type": document_type,
+                    "chunk_count": len(docs_to_insert),
+                    "token_count": total_token_count,
+                    "embedding_model": resolved_embedding_model,
+                    "uploaded_at": datetime.now(UTC),
+                }
+                await mongodb.projects.update_one(
+                    {"user_id": user_id, "project_name": project_name},
+                    {
+                        "$push": {"documents": new_doc},
+                        "$set": {"chunk_count": existing_count + len(docs_to_insert)},
+                    }
+                )
+        else:
+            await create_project(
+                user_id=user_id,
+                name=project_name,
+                project_name=project_name,
+                documents=[{
+                    "name": filename,
+                    "type": document_type,
+                    "chunk_count": len(docs_to_insert),
+                    "token_count": total_token_count,
+                    "embedding_model": resolved_embedding_model,
+                    "uploaded_at": datetime.now(UTC),
+                }],
+                chunk_count=len(docs_to_insert),
+            )
+
+        yield ("progress", {"percent": 100, "stage": "vectorize"})
+
+        chunks = [
+            ChunkData(
+                text=chunk.page_content,
+                types=["text"],
+                tables=[],
+                images=[],
+            )
+            for chunk in final_chunks
+        ]
+
+        summarized_chunks = [
+            SummarizedChunk(
+                page_content=chunk.page_content,
+                metadata={
+                    "chunk_id": str(i),
+                    "source": filename,
+                    "chunk_index": i,
+                },
+            )
+            for i, chunk in enumerate(final_chunks)
+        ]
+
+        response = IngestResponse(
+            status="ok",
+            chunk_count=len(docs_to_insert),
+            document_type=document_type,
+            no_of_pages=no_of_pages,
+            first_chunk_index=existing_count,
+            last_chunk_index=existing_count + len(docs_to_insert) - 1 if len(docs_to_insert) > 0 else existing_count,
+            token_count=total_token_count,
+            chunks=chunks,
+            summarized_chunks=summarized_chunks,
+        )
+
+        yield ("done", response.model_dump())
+
+    except ValueError as e:
+        logger.warning("Collection uniqueness violation: %s", e)
+        yield ("error", {"message": str(e)})
+    except Exception as e:
+        logger.exception("Ingestion pipeline failed")
+        yield ("error", {"message": str(e)})
+
+
 async def ingestion_pipeline(
     file_path: str | None,
     filename: str,
-    collection_name: str,
+    project_name: str,
     user_id: str,
-    project_name: str | None = None,
     chunk_size: int | None = None,
     chunk_overlap: int | None = None,
     text_splitter: str | None = None,
     transcript_text: str | None = None,
-) -> tuple[int, str, int, list[ChunkData], list[SummarizedChunk]]:
-    """Convert document to markdown, chunk, and store in MongoDB vector database.
-    
-    Args:
-        file_path: Path to uploaded file (None for transcript ingestion)
-        transcript_text: Raw text to ingest directly (skips file extraction)
-    
-    Returns:
-        tuple: (chunk_count, document_type, no_of_pages, first_chunk_index, chunks, summarized_chunks)
-    """
-    # Get existing chunk count for this collection
-    existing_count = await mongodb.vectors.count_documents(
-        {"user_id": user_id, "collection_name": collection_name}
+) -> tuple[int, str, int, int, list[ChunkData], list[SummarizedChunk]]:
+    """Non-streaming wrapper for backward compatibility."""
+    result = None
+    async for event_type, data in ingestion_pipeline_stream(
+        file_path=file_path,
+        filename=filename,
+        project_name=project_name,
+        user_id=user_id,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        text_splitter=text_splitter,
+        transcript_text=transcript_text,
+    ):
+        if event_type == "done":
+            result = data
+        elif event_type == "error":
+            raise HTTPException(status_code=400, detail=data["message"])
+
+    if result is None:
+        raise HTTPException(status_code=500, detail="Ingestion failed")
+
+    resp = IngestResponse(**result)
+    return (
+        resp.chunk_count,
+        resp.document_type,
+        resp.no_of_pages,
+        resp.first_chunk_index,
+        resp.chunks,
+        resp.summarized_chunks,
     )
-
-    if transcript_text:
-        document_type = "txt"
-        page_texts = [{"text": transcript_text, "page_number": None}]
-    else:
-        document_type = detect_document_type(file_path)
-        page_texts = await extract_text_by_page(file_path)
-    no_of_pages = len([p for p in page_texts if p["page_number"] is not None])
-
-    resolved_chunk_size = chunk_size if chunk_size is not None else settings.chunk_size
-    resolved_chunk_overlap = chunk_overlap if chunk_overlap is not None else settings.chunk_overlap
-    resolved_splitter = text_splitter or settings.text_splitter
-
-    final_chunks = []
-    
-    for page_data in page_texts:
-        page_text = page_data["text"]
-        page_number = page_data["page_number"]
-        
-        if resolved_splitter == "markdown_header":
-            header_splitter = MarkdownHeaderTextSplitter(
-                headers_to_split_on=[("#", "H1"), ("##", "H2"), ("###", "H3")]
-            )
-            header_chunks = header_splitter.split_text(page_text)
-
-            recursive_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=resolved_chunk_size,
-                chunk_overlap=resolved_chunk_overlap,
-                length_function=len,
-                separators=["\n\n", "\n", " ", ""],
-            )
-
-            page_chunks = []
-            for chunk in header_chunks:
-                if len(chunk.page_content) > settings.oversized_threshold:
-                    sub_chunks = recursive_splitter.split_documents([chunk])
-                    page_chunks.extend(sub_chunks)
-                else:
-                    page_chunks.append(chunk)
-
-        else:
-            splitter = get_splitter(resolved_splitter, resolved_chunk_size, resolved_chunk_overlap)
-            split_result = splitter.split_text(page_text)
-            
-            if hasattr(split_result[0], 'page_content'):
-                page_chunks = split_result
-            else:
-                from langchain_core.documents import Document
-                page_chunks = [Document(page_content=text) for text in split_result]
-        
-        for chunk in page_chunks:
-            chunk.metadata["page_number"] = page_number
-        
-        final_chunks.extend(page_chunks)
-    
-    if not final_chunks:
-        logger.warning("Text splitter produced zero chunks for: %s", filename)
-        raise HTTPException(status_code=400, detail="Document produced no content after splitting")
-    
-    # Assign chunk indices starting from existing_count (for append) or 0 (for new)
-    for i, chunk in enumerate(final_chunks):
-        chunk.metadata.update({
-            "source": filename,
-            "chunk_index": existing_count + i,
-            "total_chunks": existing_count + len(final_chunks),
-        })
-
-    texts = [chunk.page_content for chunk in final_chunks]
-
-    for attempt in range(2):
-        try:
-            embedding_vectors = await asyncio.wait_for(
-                asyncio.to_thread(mongodb.embeddings.embed_documents, texts),
-                timeout=120.0
-            )
-            break
-        except Exception as e:
-            if attempt == 1:
-                raise
-            logger.warning("Embedding attempt %s failed: %s, retrying...", attempt + 1, e)
-
-    now = datetime.now(UTC)
-    docs_to_insert = []
-    for i, (chunk, vector) in enumerate(zip(final_chunks, embedding_vectors)):
-        doc = {
-            "user_id": user_id,
-            "collection_name": collection_name,
-            "chunk_index": existing_count + i,
-            "content": chunk.page_content,
-            "embedding": vector,
-            "metadata": chunk.metadata,
-            "created_at": now,
-        }
-        docs_to_insert.append(doc)
-
-    await mongodb.vectors.insert_many(docs_to_insert)
-
-    # Check if project already exists
-    existing_project = await mongodb.projects.find_one(
-        {"user_id": user_id, "collection_name": collection_name}
-    )
-    
-    if existing_project:
-        # Append: update chunk_count and file_name (comma-separated)
-        existing_file_names = existing_project.get("file_name", "")
-        new_file_names = f"{existing_file_names}, {filename}" if existing_file_names else filename
-        
-        await mongodb.projects.update_one(
-            {"user_id": user_id, "collection_name": collection_name},
-            {
-                "$set": {
-                    "chunk_count": existing_count + len(docs_to_insert),
-                    "file_name": new_file_names,
-                }
-            }
-        )
-    else:
-        # Create new project
-        await create_project(
-            user_id=user_id,
-            name=project_name or filename,
-            collection_name=collection_name,
-            file_name=filename,
-            chunk_count=len(docs_to_insert),
-            document_type=document_type,
-        )
-
-    chunks = [
-        ChunkData(
-            text=chunk.page_content,
-            types=["text"],
-            tables=[],
-            images=[],
-        )
-        for chunk in final_chunks
-    ]
-
-    summarized_chunks = [
-        SummarizedChunk(
-            page_content=chunk.page_content,
-            metadata={
-                "chunk_id": str(i),
-                "source": filename,
-                "chunk_index": i,
-            },
-        )
-        for i, chunk in enumerate(final_chunks)
-    ]
-
-    return len(docs_to_insert), document_type, no_of_pages, existing_count, chunks, summarized_chunks

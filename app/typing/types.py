@@ -4,7 +4,7 @@ from langchain_core.documents import Document
 
 
 class IngestionResult(TypedDict):
-    collection_name: str
+    project_name: str
     chunks: list[Document]
     chunk_count: int
 

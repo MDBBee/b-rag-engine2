@@ -1,6 +1,4 @@
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from app.utils.ingestion_pipeline import ingestion_pipeline
 
@@ -14,6 +12,11 @@ async def test_ingestion_pipeline_success():
         mock_mongodb.vectors.count_documents = AsyncMock(return_value=0)
         mock_mongodb.projects.find_one = AsyncMock(return_value=None)
         
+        # Mock get_embeddings to return a mock embeddings instance
+        mock_embeddings = MagicMock()
+        mock_embeddings.embed_documents.return_value = [[0.1, 0.2, 0.3]]
+        mock_mongodb.get_embeddings.return_value = mock_embeddings
+        
         mock_md_instance = MagicMock()
         mock_md_instance.convert.return_value.text_content = "Test content here"
         mock_markitdown.return_value = mock_md_instance
@@ -25,13 +28,12 @@ async def test_ingestion_pipeline_success():
         mock_splitter_instance.split_text.return_value = [mock_chunk]
         mock_splitter.return_value = mock_splitter_instance
         
-        mock_mongodb.embeddings.embed_documents.return_value = [[0.1, 0.2, 0.3]]
         mock_mongodb.vectors.insert_many = AsyncMock()
         
         result = await ingestion_pipeline(
             file_path="test.txt",
             filename="test.txt",
-            collection_name="test-collection",
+            project_name="test-collection",
             user_id="user-123"
         )
         
@@ -44,11 +46,17 @@ async def test_ingestion_pipeline_success():
         assert len(summarized) == 1
         mock_create_project.assert_called_once_with(
             user_id="user-123",
-            name="test.txt",
-            collection_name="test-collection",
-            file_name="test.txt",
+            name="test-collection",
+            project_name="test-collection",
+            documents=[{
+                "name": "test.txt",
+                "type": "txt",
+                "chunk_count": 1,
+                "token_count": ANY,
+                "embedding_model": "text-embedding-3-small",
+                "uploaded_at": mock_create_project.call_args.kwargs["documents"][0]["uploaded_at"],
+            }],
             chunk_count=1,
-            document_type="txt",
         )
 
 
@@ -62,11 +70,16 @@ async def test_ingestion_pipeline_append():
         mock_mongodb.vectors.count_documents = AsyncMock(return_value=5)
         mock_mongodb.projects.find_one = AsyncMock(return_value={
             "user_id": "user-123",
-            "collection_name": "test-collection",
-            "file_name": "chapter1.txt",
+            "project_name": "test-collection",
+            "documents": [{"name": "chapter1.txt", "type": "txt", "chunk_count": 5}],
             "chunk_count": 5,
         })
         mock_mongodb.projects.update_one = AsyncMock()
+        
+        # Mock get_embeddings to return a mock embeddings instance
+        mock_embeddings = MagicMock()
+        mock_embeddings.embed_documents.return_value = [[0.1, 0.2, 0.3]]
+        mock_mongodb.get_embeddings.return_value = mock_embeddings
         
         mock_md_instance = MagicMock()
         mock_md_instance.convert.return_value.text_content = "Chapter 2 content"
@@ -79,17 +92,16 @@ async def test_ingestion_pipeline_append():
         mock_splitter_instance.split_text.return_value = [mock_chunk]
         mock_splitter.return_value = mock_splitter_instance
         
-        mock_mongodb.embeddings.embed_documents.return_value = [[0.1, 0.2, 0.3]]
         mock_mongodb.vectors.insert_many = AsyncMock()
         
         result = await ingestion_pipeline(
             file_path="chapter2.txt",
             filename="chapter2.txt",
-            collection_name="test-collection",
+            project_name="test-collection",
             user_id="user-123"
         )
         
-        chunk_count, doc_type, page_count, first_chunk_index, chunks, summarized = result
+        chunk_count, *_ = result
         assert chunk_count == 1
         
         # Verify chunk index starts from existing count
@@ -99,10 +111,10 @@ async def test_ingestion_pipeline_append():
         # Verify project was updated (not created)
         mock_mongodb.projects.update_one.assert_called_once()
         update_filter, update_ops = mock_mongodb.projects.update_one.call_args[0]
-        assert update_filter == {"user_id": "user-123", "collection_name": "test-collection"}
+        assert update_filter == {"user_id": "user-123", "project_name": "test-collection"}
         assert update_ops["$set"]["chunk_count"] == 6
-        assert "chapter1.txt" in update_ops["$set"]["file_name"]
-        assert "chapter2.txt" in update_ops["$set"]["file_name"]
+        assert "$push" in update_ops
+        assert update_ops["$push"]["documents"]["name"] == "chapter2.txt"
 
 
 async def test_ingestion_pipeline_pdf_detection():
@@ -143,11 +155,11 @@ async def test_ingestion_pipeline_pdf_detection():
         result = await ingestion_pipeline(
             file_path="test.pdf",
             filename="test.pdf",
-            collection_name="test-collection",
+            project_name="test-collection",
             user_id="user-123"
         )
         
-        _, doc_type, page_count, first_chunk_index, _, _ = result
+        _, doc_type, page_count, _, _, _ = result
         assert doc_type == "pdf"
         assert page_count == 5
 
@@ -178,7 +190,7 @@ async def test_ingestion_pipeline_metadata_enrichment():
         await ingestion_pipeline(
             file_path="test.txt",
             filename="document.pdf",
-            collection_name="test-collection",
+            project_name="test-collection",
             user_id="user-123"
         )
         

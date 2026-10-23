@@ -1,13 +1,26 @@
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from app.config import settings
-from app.routers import collections, file_processing, ingestion, quiz, retrieval, youtube_ingest
+from app.limiter import limiter
+from app.routers import (
+    collections,
+    file_processing,
+    ingestion,
+    notes,
+    quiz,
+    retrieval,
+    validate,
+    youtube_ingest,
+)
 from app.utils.mongodb import close_mongodb, init_mongodb
 from app.utils.retrieval_pipeline import init_graph
 
@@ -21,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if not settings.auth_secret:
+    if settings.auth_enabled and not settings.auth_secret:
         raise RuntimeError("AUTH_SECRET is required but not configured")
     await init_mongodb()
     init_graph()
@@ -30,6 +43,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="b-rag-engine2", version="0.1.0", lifespan=lifespan)
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,6 +56,15 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def log_request_time(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - start) * 1000
+    logger.info("%s %s → %d (%.0fms)", request.method, request.url.path, response.status_code, duration_ms)
+    return response
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     logger.warning(f"HTTP {exc.status_code} {request.method} {request.url.path}: {exc.detail}")
@@ -47,10 +72,12 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 app.include_router(ingestion.router)
 app.include_router(youtube_ingest.router)
+app.include_router(validate.router)
 app.include_router(retrieval.router)
 app.include_router(collections.router)
 app.include_router(file_processing.router)
 app.include_router(quiz.router)
+app.include_router(notes.router)
 
 
 @app.get("/health")

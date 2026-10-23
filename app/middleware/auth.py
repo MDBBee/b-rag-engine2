@@ -1,8 +1,8 @@
 import logging
 
+import jwt
 from fastapi import Depends, Header, HTTPException, status
-from jose import jwt
-from jose.exceptions import ExpiredSignatureError, JWTError
+from jwt.exceptions import ExpiredSignatureError, PyJWTError
 from pydantic import BaseModel
 
 from app.config import settings
@@ -19,6 +19,9 @@ class UserInfo(BaseModel):
 def get_current_user(
     authorization: str | None = Header(None),
 ) -> UserInfo:
+    if not settings.auth_enabled:
+        return UserInfo(id="local", email="local@localhost", role="admin")
+
     if not authorization or not authorization.startswith("Bearer "):
         logger.warning("Auth failed: missing or invalid authorization header")
         raise HTTPException(
@@ -36,7 +39,7 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token expired",
         )
-    except JWTError as e:
+    except PyJWTError as e:
         logger.warning("Auth failed: invalid token - %s", e)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
