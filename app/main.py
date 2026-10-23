@@ -15,6 +15,7 @@ from app.routers import (
     collections,
     file_processing,
     ingestion,
+    notes,
     quiz,
     retrieval,
     validate,
@@ -76,6 +77,7 @@ app.include_router(retrieval.router)
 app.include_router(collections.router)
 app.include_router(file_processing.router)
 app.include_router(quiz.router)
+app.include_router(notes.router)
 
 
 @app.get("/health")

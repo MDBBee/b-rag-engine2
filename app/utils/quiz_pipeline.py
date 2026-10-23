@@ -1,7 +1,6 @@
 import logging
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
-from typing import Literal
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
@@ -18,14 +17,6 @@ class QuizQuestions(BaseModel):
     """Wrapper for structured output — list of quiz questions."""
 
     questions: list[QuizQuestion] = Field(default_factory=list)
-
-
-class QuizIntent(BaseModel):
-    """Intent classification for quiz chat messages."""
-
-    intent: Literal["casual", "question", "research"] = Field(
-        description="casual: greetings, thanks, acknowledgments. question: asking for help, explanation, reasoning about the quiz using the document. research: explicit request to search the web or look up external information"
-    )
 
 
 FORMAT_INSTRUCTIONS = """When formatting your response:
@@ -274,7 +265,7 @@ async def quiz_explain_pipeline(
     llm_model: str | None = None,
     embedding_model: str | None = None,
 ) -> AsyncGenerator[tuple[str, str | list | None], None]:
-    """Explain a quiz question using document context (no intent/rephrase overhead).
+    """Explain a quiz question using quiz context only (no retrieval overhead).
 
     Yields tuples of (event_type, data):
     - ("token", token_string) — streamed response tokens
@@ -317,30 +308,9 @@ async def quiz_explain_pipeline(
         yield ("done", None)
         return
 
-    # Classify intent
-    try:
-        structured_llm = llm.with_structured_output(QuizIntent, method="json_schema")
-        intent_result = await structured_llm.ainvoke([
-            SystemMessage(content="""Classify the user's message into exactly one category:
-
-CASUAL: greetings, thanks, short acknowledgments
-- "hi", "hello", "thanks", "got it", "okay"
-
-QUESTION: asking for help, explanation, or reasoning about the quiz question using the uploaded document
-- "explain this question", "why is B correct", "help me understand", "what does this mean"
-
-RESEARCH: explicit request to search the web or look up external information beyond the document
-- "search the web", "find online", "look up", "what does the internet say about this"
-- "find more information", "research this topic", "check external sources"
-- Any request that explicitly asks for web/online/external research
-
-Only classify as RESEARCH if the user explicitly asks for web research. Otherwise, default to QUESTION."""),
-            HumanMessage(content=latest_user_msg),
-        ])
-        detected_intent = intent_result.intent
-    except Exception:
-        logger.warning("Intent classification failed, treating as question", exc_info=True)
-        detected_intent = "question"
+    # Detect research intent via keyword heuristic (fast, no LLM call)
+    research_keywords = {"search", "web", "online", "look up", "find more", "research", "external"}
+    detected_intent = "research" if any(kw in latest_user_msg.lower() for kw in research_keywords) else "question"
 
     # Build message history for LLM
     all_messages = []
@@ -360,28 +330,6 @@ B) {option_b}
 C) {option_c}
 D) {option_d}"""
 
-    if detected_intent == "casual":
-        system_prompt = f"""You are a friendly quiz tutor. Today's date is {today}.
-
-The user is having a conversation about this quiz question:
-
-{quiz_context}
-
-{FORMAT_INSTRUCTIONS}
-Respond naturally and conversationally. Keep it brief."""
-
-        try:
-            async for chunk in llm.astream([SystemMessage(content=system_prompt)] + all_messages):
-                if chunk.content:
-                    yield ("token", chunk.content)
-            yield ("sources", [])
-            yield ("done", None)
-        except Exception as e:
-            logger.exception("Quiz explain failed")
-            yield ("error", f"Failed to explain: {e}")
-            yield ("done", None)
-        return
-
     if detected_intent == "research":
         logger.info("quiz_explain: research intent detected, performing web search")
         try:
@@ -395,7 +343,6 @@ Respond naturally and conversationally. Keep it brief."""
 
         context_parts = []
         web_sources = []
-        images = results.get("images", [])
 
         if results.get("answer"):
             context_parts.append(f"[Web Summary]\n{results['answer']}")
@@ -440,32 +387,7 @@ Web search results:
             yield ("done", None)
         return
 
-    # Vector search for real questions
-    top_k = top_k or settings.top_k
-    pre_filter = {"user_id": user_id, "project_name": project_name}
-
-    vectorstore = mongodb.get_vectorstore(embedding_model)
-    docs = await vectorstore.asimilarity_search(question, k=top_k, pre_filter=pre_filter)
-
-    # Build context
-    context = ""
-    if docs:
-        context_parts = []
-        for i, doc in enumerate(docs, 1):
-            source = doc.metadata.get("source", "Unknown")
-            chunk_idx = doc.metadata.get("chunk_index", "N/A")
-            context_parts.append(f"[Source: {source}, chunk {chunk_idx}]\n{doc.page_content}")
-        context = "\n\n".join(context_parts)
-
-    # Build sources
-    sources = []
-    for i, doc in enumerate(docs, 1):
-        sources.append({
-            "chunk_id": str(doc.metadata.get("chunk_index", i)),
-            "content_preview": doc.page_content[:300],
-            "source": doc.metadata.get("source"),
-        })
-
+    # Direct explanation using quiz context only (no retrieval)
     system_prompt = f"""You are a helpful quiz tutor. Today's date is {today}.
 
 The user is asking about this quiz question:
@@ -473,20 +395,16 @@ The user is asking about this quiz question:
 {quiz_context}
 
 {FORMAT_INSTRUCTIONS}
-Explain what the question is asking, reason through each option using the document context below, and help the user understand which answer is correct and why.
-
-IMPORTANT: Always base your answer on the document context below. If the context doesn't contain relevant information, say so explicitly — do not fall back to general knowledge. Reference specific passages when explaining.
-
-Document context:
-{context}"""
+Explain what the question is asking, reason through each option, and help the user understand which answer is correct and why. Be concise and direct.
+"""
 
     try:
         async for chunk in llm.astream([SystemMessage(content=system_prompt)] + all_messages):
             if chunk.content:
                 yield ("token", chunk.content)
-        yield ("sources", sources)
+        yield ("sources", [])
         yield ("done", None)
     except Exception as e:
-        logger.exception("Quiz explain failed")
+        logger.exception("quiz explain failed")
         yield ("error", f"Failed to explain: {e}")
         yield ("done", None)

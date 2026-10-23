@@ -1,8 +1,8 @@
 """Test embedding model configuration for OpenRouter compatibility."""
-import pytest
-from unittest.mock import patch, MagicMock
+
+from unittest.mock import patch
+
 from app.utils import mongodb
-from app.config import settings
 
 
 @patch("app.utils.mongodb.OpenAIEmbeddings")

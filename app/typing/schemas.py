@@ -135,3 +135,14 @@ class SummaryExportRequest(BaseModel):
     """Request to export a summary as PDF or Markdown."""
     markdown_text: str = Field(..., min_length=1)
     title: str = Field(default="Summary", max_length=200)
+
+
+class NoteChatRequest(BaseModel):
+    """Request for AI assistant chat about a note."""
+    note_title: str
+    note_markdown: str
+    note_query: str | None = None
+    project_name: str
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    messages: list[ChatMessageHistory] = Field(default_factory=list)
