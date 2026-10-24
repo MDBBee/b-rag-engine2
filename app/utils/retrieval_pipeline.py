@@ -584,6 +584,7 @@ async def retrieval_pipeline(
     }
 
     sources_yielded = False
+    model_yielded = False
     node_names = {"classify_intent", "retrieve_all", "retrieve_top_k", "rephrase_query", "generate_direct", "generate", "web_research", "generate_with_web_context"}
 
     try:
@@ -644,6 +645,14 @@ async def retrieval_pipeline(
                     usage_metadata = output.get("usage_metadata")
                     if usage_metadata:
                         yield ("usage", usage_metadata)
+
+            elif event_type == "on_chat_model_end" and not model_yielded:
+                output = event.get("data", {}).get("output")
+                if output and hasattr(output, "response_metadata"):
+                    actual_model = output.response_metadata.get("model_name")
+                    if actual_model:
+                        yield ("model_info", actual_model)
+                        model_yielded = True
     except ValueError as e:
         logger.exception("retrieval_pipeline ValueError")
         yield ("error", str(e))

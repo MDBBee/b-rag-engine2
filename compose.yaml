@@ -1,6 +1,6 @@
 services:
   frontend:
-    image: bobbyugbebor/b-rag-view:1.0.1
+    image: bobbyugbebor/b-rag-view:2.0.1
     env_file:
       - ./b-rag-view/.env
     ports:
@@ -9,7 +9,7 @@ services:
       - b-rag-network
 
   backend:
-    image: bobbyugbebor/b-rag-engine2:1.0.0
+    image: bobbyugbebor/b-rag-engine2:2.0.1
     env_file:
       - ./b-rag-engine2/.env
     ports:

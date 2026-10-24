@@ -94,6 +94,10 @@ async def explain(
                 yield ServerSentEvent(raw_data=json.dumps({"type": "token", "content": data}))
             elif event_type == "sources":
                 yield ServerSentEvent(raw_data=json.dumps({"type": "sources", "sources": data}))
+            elif event_type == "web_sources":
+                yield ServerSentEvent(raw_data=json.dumps({"type": "web_sources", "sources": data}))
+            elif event_type == "model_info":
+                yield ServerSentEvent(raw_data=json.dumps({"type": "model_info", "model": data}))
             elif event_type == "error":
                 yield ServerSentEvent(raw_data=json.dumps({"type": "error", "message": data}))
             elif event_type == "done":
