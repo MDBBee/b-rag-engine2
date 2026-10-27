@@ -95,7 +95,7 @@ jobs:
 
       # === SETUP PHASE ===
       - name: Start application services
-        run: docker compose -p b-rag up -d
+        run: docker compose -f compose.yaml -f docker-compose.ci.yml -p b-rag up -d
 
       - name: Wait for services to be ready
         run: |
@@ -120,7 +120,7 @@ jobs:
 
       # === TEST EXECUTION PHASE ===
       - name: Run Robot Framework acceptance tests
-        run: uv run robot --outputdir results tests/
+        run: uv run robot --outputdir results --variable BROWSER:headlesschrome tests/
         working-directory: ./acceptance-tests
         env:
           BASE_URL: http://localhost:3000
@@ -139,7 +139,7 @@ jobs:
       # === CLEANUP PHASE ===
       - name: Tear down application services
         if: always()
-        run: docker compose -p b-rag down
+        run: docker compose -f compose.yaml -f docker-compose.ci.yml -p b-rag down
 
   terraform-plan:
     needs: [lint, unit-test, acceptance-test]

@@ -31,6 +31,7 @@ async def generate(
             llm_provider=query.llm_provider,
             llm_model=query.llm_model,
             file_scope=query.file_scope,
+            difficulty=query.difficulty,
         ):
             if event_type == "progress":
                 yield ServerSentEvent(raw_data=json.dumps({"type": "progress", "message": data}))

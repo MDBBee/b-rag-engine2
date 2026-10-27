@@ -15,6 +15,32 @@ from app.utils.web_search import web_search
 
 logger = logging.getLogger(__name__)
 
+
+def _format_model_error(error_msg: str, model_name: str) -> str:
+    """Format user-friendly error message for model failures."""
+    error_lower = error_msg.lower()
+    is_rate_limited = any(
+        pattern in error_lower for pattern in [
+            "429", "ratelimiterror", "resourceexhausted",
+            "rate-limited", "limit reached", "temporarily rate-limited",
+        ]
+    )
+    is_unavailable = any(
+        pattern in error_lower for pattern in [
+            "provider_unavailable", "model_not_found", "502", "503",
+        ]
+    )
+    if is_rate_limited or is_unavailable:
+        return (
+            f"Sorry, the model `{model_name}` is currently unavailable. "
+            f"It may be rate-limited or temporarily down. "
+            f"Please choose a different model from the Settings tab."
+        )
+    return (
+        f"Something went wrong with model `{model_name}`. "
+        f"Please try again or choose a different model from the Settings tab."
+    )
+
 compiled_graph = None
 cached_rephrase_enabled = None
 
@@ -655,7 +681,7 @@ async def retrieval_pipeline(
                         model_yielded = True
     except ValueError as e:
         logger.exception("retrieval_pipeline ValueError")
-        yield ("error", str(e))
+        yield ("error", _format_model_error(str(e), resolved_model))
         yield ("done", None)
         return
     except Exception as e:
@@ -672,7 +698,7 @@ async def retrieval_pipeline(
         if hasattr(e, 'response'):
             response_text = e.response.text if hasattr(e.response, 'text') else str(e.response)
             logger.error("retrieval_pipeline: response_body=%s", response_text)
-        yield ("error", f"LLM error: {error_type} - {error_msg[:200]}")
+        yield ("error", _format_model_error(error_msg, resolved_model))
         yield ("done", None)
         return
 

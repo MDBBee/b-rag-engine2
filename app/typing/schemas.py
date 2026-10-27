@@ -98,6 +98,7 @@ class QuizRequest(BaseModel):
     file_scope: list[str] | None = Field(default=None)
     llm_provider: str | None = Field(default=None)
     llm_model: str | None = Field(default=None)
+    difficulty: str | None = Field(default=None)
 
 
 class QuizQuestion(BaseModel):

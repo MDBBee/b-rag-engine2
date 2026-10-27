@@ -74,6 +74,8 @@ async def query_stream(
                 yield ServerSentEvent(raw_data=json.dumps({"type": "usage", "usage": data}))
             elif event_type == "model_info":
                 yield ServerSentEvent(raw_data=json.dumps({"type": "model_info", "model": data}))
+            elif event_type == "error":
+                yield ServerSentEvent(raw_data=json.dumps({"type": "error", "message": data}))
             elif event_type == "done":
                 yield ServerSentEvent(raw_data=json.dumps({"type": "done"}))
     except Exception:

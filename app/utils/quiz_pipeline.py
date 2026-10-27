@@ -10,6 +10,11 @@ from app.utils.assistant_chat_pipeline import assistant_chat_pipeline
 
 logger = logging.getLogger(__name__)
 
+DIFFICULTY_MODIFIERS = {
+    'easy': 'Questions should be approachable and focus on foundational concepts.',
+    'hard': 'Questions should require careful analysis and the ability to distinguish subtle differences between plausible options.',
+}
+
 
 class QuizQuestions(BaseModel):
     """Wrapper for structured output — list of quiz questions."""
@@ -44,6 +49,7 @@ async def generate_quiz(
     llm_provider: str | None = None,
     llm_model: str | None = None,
     file_scope: list[str] | None = None,
+    difficulty: str | None = None,
 ) -> AsyncGenerator[tuple[str, dict | str | None], None]:
     """Generate quiz questions from document chunks.
 
@@ -111,6 +117,11 @@ async def generate_quiz(
 
     context = "\n\n".join(context_parts)
 
+    difficulty_line = ""
+    modifier = DIFFICULTY_MODIFIERS.get(difficulty)
+    if modifier:
+        difficulty_line = f"\nDifficulty adjustment: {modifier}\n"
+
     prompt = f"""Generate exactly 15 multiple-choice questions from the following document content.
 
 Rules:
@@ -119,7 +130,7 @@ Rules:
 - Questions should test understanding, not just recall
 - Vary difficulty across questions
 - Cover different sections/pages of the document
-
+{difficulty_line}
 Rich Content (use the rich_content field for these):
 - Include markdown tables when comparing data, presenting structured information, or showing relationships
 - Include mermaid diagrams when visualizing processes, flows, hierarchies, or systems (use ```mermaid code blocks)
