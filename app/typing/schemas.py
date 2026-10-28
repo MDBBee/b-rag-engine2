@@ -126,6 +126,7 @@ class QuizExplainRequest(BaseModel):
     llm_model: str | None = Field(default=None)
     top_k: int | None = Field(default=None)
     messages: list[ChatMessageHistory] = Field(default_factory=list)
+    skip_context: bool = False
 
 
 class CollectionUpdateRequest(BaseModel):
@@ -147,3 +148,4 @@ class NoteChatRequest(BaseModel):
     llm_provider: str | None = None
     llm_model: str | None = None
     messages: list[ChatMessageHistory] = Field(default_factory=list)
+    skip_context: bool = False

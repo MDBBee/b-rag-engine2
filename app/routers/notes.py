@@ -43,6 +43,7 @@ async def note_chat(
             messages=chat_request.messages,
             llm_provider=chat_request.llm_provider,
             llm_model=chat_request.llm_model,
+            skip_context=chat_request.skip_context,
         ):
             if event_type == "token":
                 yield ServerSentEvent(raw_data=json.dumps({"type": "token", "content": data}))
@@ -52,6 +53,8 @@ async def note_chat(
                 yield ServerSentEvent(raw_data=json.dumps({"type": "web_sources", "sources": data}))
             elif event_type == "model_info":
                 yield ServerSentEvent(raw_data=json.dumps({"type": "model_info", "model": data}))
+            elif event_type == "usage":
+                yield ServerSentEvent(raw_data=json.dumps({"type": "usage", "usage": data}))
             elif event_type == "done":
                 yield ServerSentEvent(raw_data=json.dumps({"type": "done"}))
             elif event_type == "error":

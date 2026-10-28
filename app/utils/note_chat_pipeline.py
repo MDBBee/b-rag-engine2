@@ -12,7 +12,8 @@ async def note_chat_pipeline(
     messages: list[ChatMessageHistory] | None,
     llm_provider: str | None = None,
     llm_model: str | None = None,
-) -> AsyncGenerator[tuple[str, str | list | None], None]:
+    skip_context: bool = False,
+) -> AsyncGenerator[tuple[str, str | list | dict | None], None]:
     """AI assistant chat about a note — thin wrapper around assistant_chat_pipeline."""
     context_content = note_markdown
 
@@ -24,5 +25,6 @@ async def note_chat_pipeline(
         messages=messages,
         llm_provider=llm_provider,
         llm_model=llm_model,
+        skip_context=skip_context,
     ):
         yield event

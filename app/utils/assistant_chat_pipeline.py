@@ -53,6 +53,53 @@ Never concatenate multiple lines together. Keep cells concise (under 20 words).
 """
 
 
+def _extract_usage(chunk) -> dict | None:
+    """Extract token usage from a LangChain response chunk."""
+    usage = None
+    if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+        um = chunk.usage_metadata
+        usage = {
+            "input_tokens": getattr(um, "input_tokens", 0) or 0,
+            "output_tokens": getattr(um, "output_tokens", 0) or 0,
+            "total_tokens": getattr(um, "total_tokens", 0) or 0,
+        }
+    if not usage and hasattr(chunk, "response_metadata") and chunk.response_metadata:
+        rm = chunk.response_metadata
+        if "usage" in rm:
+            u = rm["usage"]
+            usage = {
+                "input_tokens": u.get("prompt_tokens", 0) or u.get("input_tokens", 0),
+                "output_tokens": u.get("completion_tokens", 0) or u.get("output_tokens", 0),
+                "total_tokens": u.get("total_tokens", 0) or (u.get("prompt_tokens", 0) + u.get("completion_tokens", 0)),
+            }
+    return usage
+
+
+async def _stream_llm(
+    llm, messages: list
+) -> AsyncGenerator[tuple[str, str | dict | None], None]:
+    """Stream LLM response, yielding model_info, token, and usage events."""
+    model_yielded = False
+    last_usage = None
+    async for chunk in llm.astream(messages):
+        if not model_yielded:
+            actual_model = None
+            if hasattr(chunk, "response_metadata"):
+                actual_model = chunk.response_metadata.get("model_name")
+            if not actual_model and hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                actual_model = getattr(chunk.usage_metadata, "model", None)
+            if actual_model:
+                yield ("model_info", actual_model)
+                model_yielded = True
+        if chunk.content:
+            yield ("token", chunk.content)
+        usage = _extract_usage(chunk)
+        if usage:
+            last_usage = usage
+    if last_usage:
+        yield ("usage", last_usage)
+
+
 async def assistant_chat_pipeline(
     context_title: str,
     context_content: str,
@@ -62,14 +109,16 @@ async def assistant_chat_pipeline(
     llm_model: str | None = None,
     context_query: str | None = None,
     system_prompt_override: str | None = None,
-) -> AsyncGenerator[tuple[str, str | list | None], None]:
-    """Generic AI assistant chat with context.
+    skip_context: bool = False,
+) -> AsyncGenerator[tuple[str, str | list | dict | None], None]:
+    """Generic AI assistant chat with optional context.
 
     Yields tuples of (event_type, data):
     - ("token", token_string) — streamed response tokens
     - ("sources", source_list) — retrieved document chunks
     - ("web_sources", source_list) — web search results
-    - ("model_info", model_name) — actual model used by OpenRouter
+    - ("model_info", model_name) — actual model used
+    - ("usage", usage_dict) — token usage stats
     - ("error", message) — fatal error
     - ("done", None) — stream complete
     """
@@ -107,6 +156,21 @@ async def assistant_chat_pipeline(
         yield ("done", None)
         return
 
+    all_messages = []
+    if messages:
+        for m in messages:
+            if m.role == "user":
+                all_messages.append(HumanMessage(content=m.content))
+            else:
+                all_messages.append(AIMessage(content=m.content))
+
+    today = datetime.now(tz=UTC).strftime("%B %d, %Y")
+
+    if skip_context:
+        async for event_type, data in _handle_skip_context(llm, all_messages, latest_user_msg, today):
+            yield (event_type, data)
+        return
+
     try:
         structured_llm = llm.with_structured_output(AssistantChatIntent, method="json_schema")
         intent_result = await structured_llm.ainvoke([
@@ -130,16 +194,6 @@ Only classify as RESEARCH if the user explicitly asks for web research. Otherwis
         logger.warning("Assistant chat intent classification failed, treating as question", exc_info=True)
         detected_intent = "question"
 
-    all_messages = []
-    if messages:
-        for m in messages:
-            if m.role == "user":
-                all_messages.append(HumanMessage(content=m.content))
-            else:
-                all_messages.append(AIMessage(content=m.content))
-
-    today = datetime.now(tz=UTC).strftime("%B %d, %Y")
-
     context_block = f'Context title: "{context_title}"'
     if context_query:
         context_block += f'\nOriginal query: "{context_query}"'
@@ -156,15 +210,8 @@ The user is having a conversation about this context:
 Respond naturally and conversationally. Keep it brief."""
 
         try:
-            model_yielded = False
-            async for chunk in llm.astream([SystemMessage(content=system_prompt)] + all_messages):
-                if not model_yielded:
-                    actual_model = chunk.response_metadata.get("model_name") if hasattr(chunk, "response_metadata") else None
-                    if actual_model:
-                        yield ("model_info", actual_model)
-                        model_yielded = True
-                if chunk.content:
-                    yield ("token", chunk.content)
+            async for event_type, data in _stream_llm(llm, [SystemMessage(content=system_prompt)] + all_messages):
+                yield (event_type, data)
             yield ("sources", [])
             yield ("done", None)
         except Exception as e:
@@ -184,27 +231,8 @@ Respond naturally and conversationally. Keep it brief."""
             yield ("done", None)
             return
 
-        context_parts = []
-        web_sources = []
-        images = results.get("images", [])
-
-        if results.get("answer"):
-            context_parts.append(f"[Web Summary]\n{results['answer']}")
-
-        for i, r in enumerate(results.get("results", []), 1):
-            context_parts.append(
-                f"[Source {i}: {r.get('title', 'Unknown')}]\n"
-                f"URL: {r.get('url', '')}\n"
-                f"{r.get('content', '')}"
-            )
-            web_sources.append({
-                "title": r.get("title", ""),
-                "url": r.get("url", ""),
-                "preview": r.get("content", "")[:300],
-                "imageUrl": images[i - 1] if i - 1 < len(images) else None,
-            })
-
-        context = "\n\n---\n\n".join(context_parts)
+        web_sources = _build_web_sources(results)
+        context = _build_web_context(results)
 
         system_prompt = system_prompt_override or f"""You are a helpful research assistant. Today's date is {today}.
 
@@ -221,15 +249,8 @@ Web search results:
 {context}"""
 
         try:
-            model_yielded = False
-            async for chunk in llm.astream([SystemMessage(content=system_prompt)] + all_messages):
-                if not model_yielded:
-                    actual_model = chunk.response_metadata.get("model_name") if hasattr(chunk, "response_metadata") else None
-                    if actual_model:
-                        yield ("model_info", actual_model)
-                        model_yielded = True
-                if chunk.content:
-                    yield ("token", chunk.content)
+            async for event_type, data in _stream_llm(llm, [SystemMessage(content=system_prompt)] + all_messages):
+                yield (event_type, data)
             yield ("web_sources", web_sources)
             yield ("done", None)
         except Exception as e:
@@ -238,7 +259,6 @@ Web search results:
             yield ("done", None)
         return
 
-    # Question intent - answer using context
     system_prompt = system_prompt_override or f"""You are a helpful research assistant. Today's date is {today}.
 
 The user is asking about this context:
@@ -252,18 +272,97 @@ If the context doesn't contain relevant information, say so explicitly.
 Use the conversation history to maintain context."""
 
     try:
-        model_yielded = False
-        async for chunk in llm.astream([SystemMessage(content=system_prompt)] + all_messages):
-            if not model_yielded:
-                actual_model = chunk.response_metadata.get("model_name") if hasattr(chunk, "response_metadata") else None
-                if actual_model:
-                    yield ("model_info", actual_model)
-                    model_yielded = True
-            if chunk.content:
-                yield ("token", chunk.content)
+        async for event_type, data in _stream_llm(llm, [SystemMessage(content=system_prompt)] + all_messages):
+            yield (event_type, data)
         yield ("sources", [])
         yield ("done", None)
     except Exception as e:
         logger.exception("Assistant chat question response failed")
+        yield ("error", f"Failed to respond: {e}")
+        yield ("done", None)
+
+
+def _build_web_sources(results: dict) -> list[dict]:
+    """Build web source objects from search results."""
+    web_sources = []
+    images = results.get("images", [])
+    for i, r in enumerate(results.get("results", []), 1):
+        web_sources.append({
+            "title": r.get("title", ""),
+            "url": r.get("url", ""),
+            "preview": r.get("content", "")[:300],
+            "imageUrl": images[i - 1] if i - 1 < len(images) else None,
+        })
+    return web_sources
+
+
+def _build_web_context(results: dict) -> str:
+    """Build context string from web search results."""
+    context_parts = []
+    if results.get("answer"):
+        context_parts.append(f"[Web Summary]\n{results['answer']}")
+    for i, r in enumerate(results.get("results", []), 1):
+        context_parts.append(
+            f"[Source {i}: {r.get('title', 'Unknown')}]\n"
+            f"URL: {r.get('url', '')}\n"
+            f"{r.get('content', '')}"
+        )
+    return "\n\n---\n\n".join(context_parts)
+
+
+async def _handle_skip_context(
+    llm, all_messages: list, latest_user_msg: str, today: str
+) -> AsyncGenerator[tuple[str, str | list | dict | None], None]:
+    """Handle plain LLM chat without document context — supports web search."""
+    msg_lower = latest_user_msg.lower()
+    research_keywords = ["search the web", "find online", "look up", "what does the internet say", "search online", "google"]
+    is_research = any(kw in msg_lower for kw in research_keywords)
+
+    if is_research:
+        logger.info("assistant_chat skip_context: research intent, performing web search")
+        try:
+            results = await web_search(latest_user_msg)
+        except Exception:
+            logger.exception("assistant_chat: web search failed")
+            yield ("error", "Web search failed. Please try again.")
+            yield ("done", None)
+            return
+
+        web_sources = _build_web_sources(results)
+        context = _build_web_context(results)
+
+        system_prompt = f"""You are a helpful research assistant. Today's date is {today}.
+
+{FORMAT_INSTRUCTIONS}
+Provide information based on the web search results below. Cite sources when possible.
+
+User's request: {latest_user_msg}
+
+Web search results:
+{context}"""
+
+        try:
+            async for event_type, data in _stream_llm(llm, [SystemMessage(content=system_prompt)] + all_messages):
+                yield (event_type, data)
+            yield ("web_sources", web_sources)
+            yield ("done", None)
+        except Exception as e:
+            logger.exception("Assistant chat research response failed")
+            yield ("error", f"Failed to respond: {e}")
+            yield ("done", None)
+        return
+
+    system_prompt = f"""You are a helpful AI assistant. Today's date is {today}.
+
+{FORMAT_INSTRUCTIONS}
+Answer the user's question clearly and helpfully."""
+
+    try:
+        async for event_type, data in _stream_llm(llm, [SystemMessage(content=system_prompt)] + all_messages):
+            yield (event_type, data)
+        yield ("sources", [])
+        yield ("done", None)
+    except Exception as e:
+        logger.exception("Assistant chat skip_context response failed")
         yield ("error", f"Failed to respond: {e}")
         yield ("done", None)

@@ -6,7 +6,7 @@ from typing import Annotated, Literal, TypedDict
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.config import settings
 from app.typing.schemas import ChatMessageHistory
@@ -64,6 +64,12 @@ class IntentDecision(BaseModel):
     intent: Literal["casual", "summary", "specific", "research"] = Field(
         description="casual: greetings/chat, summary: overview/main points, specific: targeted question, research: explicit request for web search"
     )
+
+    @field_validator("intent", mode="before")
+    @classmethod
+    def normalize_intent(cls, v: str) -> str:
+        """Normalize intent to lowercase to handle LLM case variations."""
+        return v.lower() if isinstance(v, str) else v
 
 
 class RAGState(TypedDict):

@@ -90,6 +90,7 @@ async def explain(
             top_k=query.top_k,
             llm_provider=query.llm_provider,
             llm_model=query.llm_model,
+            skip_context=query.skip_context,
         ):
             if event_type == "token":
                 yield ServerSentEvent(raw_data=json.dumps({"type": "token", "content": data}))
@@ -99,6 +100,8 @@ async def explain(
                 yield ServerSentEvent(raw_data=json.dumps({"type": "web_sources", "sources": data}))
             elif event_type == "model_info":
                 yield ServerSentEvent(raw_data=json.dumps({"type": "model_info", "model": data}))
+            elif event_type == "usage":
+                yield ServerSentEvent(raw_data=json.dumps({"type": "usage", "usage": data}))
             elif event_type == "error":
                 yield ServerSentEvent(raw_data=json.dumps({"type": "error", "message": data}))
             elif event_type == "done":
