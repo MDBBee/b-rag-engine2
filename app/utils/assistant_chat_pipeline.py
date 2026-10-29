@@ -100,6 +100,59 @@ async def _stream_llm(
         yield ("usage", last_usage)
 
 
+def _build_intent_prompt(today: str, include_context_hint: bool = False) -> str:
+    """System prompt for classifying user intent into casual/question/research."""
+    question_desc = (
+        "asking about the provided CONTEXT / SOURCE DOCUMENTS, or fixed knowledge\n"
+        "- About the context: \"what does the context say about X\", \"explain this part\", \"summarize the source documents\"\n"
+        "- Definitions / historical facts / scientific concepts that don't change over time\n"
+        "- \"what is photosynthesis?\", \"when was WWII?\", \"how does gravity work?\""
+        if include_context_hint
+        else "fixed knowledge that doesn't change over time (definitions, historical facts, scientific concepts)\n"
+        "- \"what is photosynthesis?\", \"who was Einstein?\", \"how does gravity work?\""
+    )
+    return f"""Classify the user's message into exactly one category. Respond in JSON: {{"intent": "casual"|"question"|"research"}}
+
+CASUAL: greetings, thanks, short acknowledgments
+- "hi", "hello", "thanks", "got it", "okay"
+
+QUESTION: {question_desc}
+
+RESEARCH: questions requiring CURRENT / REAL-TIME information, OR EXPLICIT web search
+- Explicit requests: "search the web", "find online", "look up", "what does the internet say", "compare with external sources"
+- Time-sensitive words: "today", "now", "current", "latest", "2026", "recent", "this week", "yesterday"
+- Real-time data: weather, prices, availability, schedules, enrollment, openings
+- Current state of entities: "does VAMK have a nursing program?", "is X available?", "current prices", "what programs does [institution] offer?"
+- Current offerings / status of a specific institution, business or service
+- News / current events: "latest news about", "what happened recently"
+
+CRITICAL RULE: Use the TIME TEST — "Would the answer be DIFFERENT if asked in 2023 vs {today[:4]}?"
+- YES (weather, programs, prices, availability, current events, schedules) → RESEARCH
+- NO (definitions, historical facts, scientific concepts) → QUESTION
+
+When in doubt: if the query is about a SPECIFIC entity (school, business, service, authority) and asks about current offerings, availability, requirements or status, choose RESEARCH because this information changes over time."""
+
+
+async def _classify_intent(
+    llm, latest_user_msg: str, today: str, include_context_hint: bool = False
+) -> str:
+    """Classify user intent via structured output. Falls back to keyword scan on error."""
+    try:
+        structured_llm = llm.with_structured_output(AssistantChatIntent, method="json_schema")
+        intent_result = await structured_llm.ainvoke([
+            SystemMessage(content=_build_intent_prompt(today, include_context_hint)),
+            HumanMessage(content=latest_user_msg),
+        ])
+        return intent_result.intent
+    except Exception:
+        logger.warning("Assistant chat intent classification failed, falling back to keywords", exc_info=True)
+        msg_lower = latest_user_msg.lower()
+        research_keywords = ["search the web", "find online", "look up", "what does the internet say", "search online", "google"]
+        if any(kw in msg_lower for kw in research_keywords):
+            return "research"
+        return "question"
+
+
 async def assistant_chat_pipeline(
     context_title: str,
     context_content: str,
@@ -171,28 +224,7 @@ async def assistant_chat_pipeline(
             yield (event_type, data)
         return
 
-    try:
-        structured_llm = llm.with_structured_output(AssistantChatIntent, method="json_schema")
-        intent_result = await structured_llm.ainvoke([
-            SystemMessage(content="""Classify the user's message into exactly one category:
-
-CASUAL: greetings, thanks, short acknowledgments
-- "hi", "hello", "thanks", "got it", "okay"
-
-QUESTION: asking about the context, source documents, or requesting explanations
-- "what does the context say about X", "explain this part", "summarize the source documents"
-
-RESEARCH: explicit request to search the web or look up external information
-- "search the web", "find online", "look up", "what does the internet say"
-- Any request that explicitly asks for web/online/external research
-
-Only classify as RESEARCH if the user explicitly asks for web research. Otherwise, default to QUESTION."""),
-            HumanMessage(content=latest_user_msg),
-        ])
-        detected_intent = intent_result.intent
-    except Exception:
-        logger.warning("Assistant chat intent classification failed, treating as question", exc_info=True)
-        detected_intent = "question"
+    detected_intent = await _classify_intent(llm, latest_user_msg, today, include_context_hint=True)
 
     context_block = f'Context title: "{context_title}"'
     if context_query:
@@ -314,9 +346,8 @@ async def _handle_skip_context(
     llm, all_messages: list, latest_user_msg: str, today: str
 ) -> AsyncGenerator[tuple[str, str | list | dict | None], None]:
     """Handle plain LLM chat without document context — supports web search."""
-    msg_lower = latest_user_msg.lower()
-    research_keywords = ["search the web", "find online", "look up", "what does the internet say", "search online", "google"]
-    is_research = any(kw in msg_lower for kw in research_keywords)
+    detected_intent = await _classify_intent(llm, latest_user_msg, today, include_context_hint=False)
+    is_research = detected_intent == "research"
 
     if is_research:
         logger.info("assistant_chat skip_context: research intent, performing web search")
