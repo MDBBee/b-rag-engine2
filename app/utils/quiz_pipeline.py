@@ -29,6 +29,21 @@ Tables - Use proper markdown table syntax:
 |----------|----------|----------|
 | Data     | Data     | Data     |
 
+Diagrams - Use ONLY valid Mermaid syntax in fenced code blocks. IMPORTANT: Put each node definition on a separate line:
+```mermaid
+graph TD
+    A[Start] --> B[Process]
+    B --> C[End]
+```
+
+NOT like this (incorrect - all on one line):
+```mermaid
+graph TD A[Start] --> B[Process] B --> C[End]
+```
+
+Valid Mermaid types: graph TD, graph LR, sequenceDiagram, classDiagram, stateDiagram, flowchart
+DO NOT use ASCII art or text sketches - they will not render.
+
 Lists - Use markdown list syntax:
 - Item 1
 - Item 2
