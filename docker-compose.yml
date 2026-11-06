@@ -21,7 +21,7 @@ services:
       - b-rag-network
 
   frontend:
-    image: b-rag-view:1.0.0
+    image: b-rag-view:2.0.1
     env_file:
       - ../b-rag-view/.env
     ports:
