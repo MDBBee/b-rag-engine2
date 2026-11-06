@@ -9,9 +9,12 @@ services:
       - b-rag-network
 
   backend:
-    image: bobbyugbebor/b-rag-engine2:2.0.1
+    build:
+      context: .
+      target: prod
+    image: b-rag-engine2:latest
     env_file:
-      - ./b-rag-engine2/.env
+      - ./.env
     ports:
       - "8000:8000"
     networks:
