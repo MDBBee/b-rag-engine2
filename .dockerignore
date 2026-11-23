@@ -1,0 +1,55 @@
+# Build context: b-rag-engine2/
+# Globs: Go filepath.Match + "**". "#" = comment, "!" = re-include, last match wins.
+
+# Python bytecode and tool caches
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# Virtual environments (host binaries, unusable in a Linux image)
+.venv/
+venv/
+ENV/
+
+# Secrets and env files
+.env
+.env.*
+!.env.example
+
+# VCS, CI, editor, OS
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Infrastructure: terraform.tfvars and provider binaries must not leave the machine
+terraform/
+
+# Local runtime data, logs, temp
+data/
+logs/
+*.log
+tmp/
+
+# Notebooks and docs (README.md is not needed: uv sync uses --no-install-project)
+*.ipynb
+.ipynb_checkpoints/
+*.md
+
+# Docker files themselves (still sent to the builder, just not copyable)
+Dockerfile
+compose.yaml
+docker-compose*.yml
+.dockerignore
+
+# Deliberately NOT ignored: app/, pyproject.toml, uv.lock, .python-version

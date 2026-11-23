@@ -279,6 +279,14 @@ Tables - Use proper markdown table syntax:
 |----------|----------|----------|
 | Data     | Data     | Data     |
 
+Diagrams - Use ONLY valid Mermaid syntax. Put each node on a separate line:
+```mermaid
+graph TD
+    A[Start] --> B[Process]
+    B --> C[End]
+```
+NOT like this: ```mermaid graph TD A[Start] --> B[Process] B --> C[End]
+
 Lists - Use markdown list syntax:
 - Item 1
 - Item 2
@@ -373,6 +381,7 @@ Guidelines:
 - If images were found, mention them as available references
 - Organize information logically with markdown formatting
 - Use tables, lists, and code blocks as appropriate
+- For Mermaid diagrams, put each node on a separate line (not concatenated)
 - Do NOT include apologies, filler phrases, or hedging
 - Do NOT use placeholder letters (A, B, C, D) in tables — write "Data not available" if unknown
 
@@ -446,6 +455,7 @@ Guidelines:
 | Data     | Data     |
 - For lists, use: - Item 1\n- Item 2
 - For code, use fenced blocks with language tags
+- For Mermaid diagrams, put each node on a separate line (not concatenated)
 - Never concatenate multiple lines together
 
 Context:
@@ -465,6 +475,7 @@ Guidelines:
 | Data     | Data     |
 - For lists, use: - Item 1\n- Item 2
 - For code, use fenced blocks with language tags
+- For Mermaid diagrams, put each node on a separate line (not concatenated)
 - Never concatenate multiple lines together
 
 Context:

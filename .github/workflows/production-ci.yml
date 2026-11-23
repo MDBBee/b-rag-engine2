@@ -59,19 +59,14 @@ jobs:
 
   acceptance-test:
     needs: [lint, unit-test]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7.0.1
-
-      # === BUILD PHASE ===
-      - name: Build backend Docker image
-        run: docker build --target prod -t b-rag-engine2:latest .
 
       # === CONFIGURATION PHASE ===
       - name: Configure backend environment
         run: |
-          mkdir -p b-rag-engine2
-          cat > b-rag-engine2/.env << EOF
+          cat > .env << 'EOF'
           MONGODB_URI=${{ secrets.MONGODB_URI }}
           OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
           AUTH_SECRET=${{ secrets.AUTH_SECRET }}
@@ -83,7 +78,7 @@ jobs:
       - name: Configure frontend environment
         run: |
           mkdir -p b-rag-view
-          cat > b-rag-view/.env << EOF
+          cat > b-rag-view/.env << 'EOF'
           DATABASE_URL=${{ secrets.DATABASE_URL }}
           AUTH_SECRET=${{ secrets.AUTH_SECRET }}
           AUTH_TRUST_HOST=true
@@ -95,7 +90,7 @@ jobs:
 
       # === SETUP PHASE ===
       - name: Start application services
-        run: docker compose -f compose.yaml -f docker-compose.ci.yml -p b-rag up -d
+        run: docker compose -p b-rag up -d --build
 
       - name: Wait for services to be ready
         run: |
@@ -139,7 +134,7 @@ jobs:
       # === CLEANUP PHASE ===
       - name: Tear down application services
         if: always()
-        run: docker compose -f compose.yaml -f docker-compose.ci.yml -p b-rag down
+        run: docker compose -p b-rag down
 
   terraform-plan:
     needs: [lint, unit-test, acceptance-test]
